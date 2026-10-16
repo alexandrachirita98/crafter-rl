@@ -1,0 +1,11 @@
+$ python -m common.networks
+conv flatten   1024 (expected 1024)
+trunk features (4, 512)
+q values       (4, 17) (expected (4, 17))
+parameters     609,457
+shapes OK
+
+$ python -m common.replay
+sampled 2000 transitions across a wrap, all successors valid
+1M-frame buffer would allocate 12.3 GB
+buffer OK

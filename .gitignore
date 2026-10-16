@@ -5,3 +5,22 @@ __pycache__/
 /*.png
 /*.mp4
 .DS_Store
+
+# Local-only notes, papers and assignment material
+/docs/
+
+# Training artifacts and recorded episodes
+/logdir/
+/demos/
+*.npz
+
+# Checkpoints
+*.pt
+*.pth
+*.ckpt
+
+# Virtualenvs / editor
+.venv/
+venv/
+.idea/
+.vscode/

@@ -1,0 +1,11 @@
+method                        ours  published   delta
+------------------------------------------------------
+dreamerv2                    9.98%      10.0%  -0.02  OK
+human                       50.53%      50.5%  +0.03  OK
+ppo                          4.57%       4.6%  -0.03  OK
+rainbow                      4.31%       4.3%  +0.01  OK
+random                       1.55%       1.6%  -0.05  OK
+unsup_plan2explore           2.11%       2.1%  +0.01  OK
+unsup_rnd                    2.01%       2.0%  +0.01  OK
+
+All 7 scored methods match the published table within 0.1 points. The scorer is trustworthy.

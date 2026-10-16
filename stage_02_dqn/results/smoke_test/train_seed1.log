@@ -1,0 +1,22 @@
+$ python stage_02_dqn/train.py --total-steps 2000 --learning-starts 500 --buffer-size 5000
+
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+stage stage_02_dqn  seed 1  steps 2,000  device cuda
+buffer 2,000 frames = 0.0 GB host RAM
+logging to logdir/crafter_reward-stage_02_dqn/1/stats.jsonl
+
+done: 12 episodes in 0.7 min (51 fps)
+score over 12 episodes: 1.21%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up              100.0%
+  collect_sapling       50.0%
+  place_plant           41.7%
+  collect_wood          16.7%
+  collect_drink          8.3%
+
+--- note: no per-step log lines appeared because --log-every defaults to 10,000
+--- and the run was only 2,000 steps. Fixed for later smoke tests; see README.

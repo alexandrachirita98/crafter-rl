@@ -1,0 +1,123 @@
+{
+  "stage": "stage_01_random",
+  "policy": "uniform random over 17 actions",
+  "machine": "local WSL2, CPU only",
+  "env_steps": 1000000,
+  "seed": 1,
+  "episodes": 5959,
+  "wall_minutes": 32.2,
+  "fps": 517,
+  "score_percent": 1.513,
+  "mean_episode_length": 167.8,
+  "mean_episode_reward": 1.389,
+  "published_baseline": {
+    "source": "scores/crafter_noreward-random.json",
+    "per_seed_scores": [
+      1.544,
+      1.543,
+      1.563,
+      1.534,
+      1.568
+    ],
+    "mean": 1.55,
+    "std": 0.013,
+    "readme_rounded": 1.6,
+    "episodes_per_seed": [
+      5969,
+      5934,
+      5910,
+      5991,
+      5980
+    ]
+  },
+  "success_percent": {
+    "collect_coal": {
+      "ours": 0.0,
+      "published_mean": 0.0
+    },
+    "collect_diamond": {
+      "ours": 0.0,
+      "published_mean": 0.0
+    },
+    "collect_drink": {
+      "ours": 9.599,
+      "published_mean": 9.322
+    },
+    "collect_iron": {
+      "ours": 0.0,
+      "published_mean": 0.0
+    },
+    "collect_sapling": {
+      "ours": 51.854,
+      "published_mean": 50.185
+    },
+    "collect_stone": {
+      "ours": 0.0,
+      "published_mean": 0.013
+    },
+    "collect_wood": {
+      "ours": 23.813,
+      "published_mean": 24.378
+    },
+    "defeat_skeleton": {
+      "ours": 0.0,
+      "published_mean": 0.017
+    },
+    "defeat_zombie": {
+      "ours": 0.084,
+      "published_mean": 0.138
+    },
+    "eat_cow": {
+      "ours": 0.319,
+      "published_mean": 0.376
+    },
+    "eat_plant": {
+      "ours": 0.0,
+      "published_mean": 0.007
+    },
+    "make_iron_pickaxe": {
+      "ours": 0.0,
+      "published_mean": 0.0
+    },
+    "make_iron_sword": {
+      "ours": 0.0,
+      "published_mean": 0.0
+    },
+    "make_stone_pickaxe": {
+      "ours": 0.0,
+      "published_mean": 0.0
+    },
+    "make_stone_sword": {
+      "ours": 0.0,
+      "published_mean": 0.0
+    },
+    "make_wood_pickaxe": {
+      "ours": 0.201,
+      "published_mean": 0.322
+    },
+    "make_wood_sword": {
+      "ours": 0.185,
+      "published_mean": 0.319
+    },
+    "place_furnace": {
+      "ours": 0.0,
+      "published_mean": 0.0
+    },
+    "place_plant": {
+      "ours": 46.602,
+      "published_mean": 44.615
+    },
+    "place_stone": {
+      "ours": 0.0,
+      "published_mean": 0.01
+    },
+    "place_table": {
+      "ours": 3.994,
+      "published_mean": 4.362
+    },
+    "wake_up": {
+      "ours": 93.455,
+      "published_mean": 93.603
+    }
+  }
+}
