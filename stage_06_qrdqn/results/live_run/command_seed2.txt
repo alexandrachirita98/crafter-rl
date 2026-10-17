@@ -1,0 +1,1 @@
+python stage_06_qrdqn/train.py --total-steps 200000 --seed 2 --logdir logdir

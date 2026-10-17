@@ -1,0 +1,8 @@
+$ python stage_08_per/train.py --test-per
+Setting all rngs to seed=0
+transitions stored      38  (n-step window holds back 2)
+written leaves > 0      True   want True   (range 1.00-2.88)
+unwritten leaves == 0   True   want True   (26 padding leaves to capacity 64)
+beta moved off 0.4      0.97  want > 0.4
+
+PASS

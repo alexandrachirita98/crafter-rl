@@ -1,0 +1,7 @@
+Setting all rngs to seed=2
+stage stage_05b_dueling_solo  seed 2  steps 200,000  device cuda
+buffer 100,000 transitions = 2.5 GB host RAM
+logging to /tmp/crafter-277588/crafter_reward-stage_05b_dueling_solo/2/stats.jsonl
+[  59][   10000], R/ep=  1.20, eps=1.00, loss=     nan, meanQ=    nan,   118 fps
+[ 115][   20000], R/ep=  1.80, eps=1.00, loss=     nan, meanQ=    nan,   121 fps
+[ 175][   30000], R/ep=  0.80, eps=0.96, loss=  0.0050, meanQ=  0.613,   101 fps

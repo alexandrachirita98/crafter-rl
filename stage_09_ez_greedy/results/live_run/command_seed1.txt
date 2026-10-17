@@ -1,0 +1,1 @@
+python stage_09_ez_greedy/train.py --total-steps 200000 --seed 1 --logdir logdir

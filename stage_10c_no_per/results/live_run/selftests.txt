@@ -1,0 +1,19 @@
+$ python stage_10c_no_per/train.py --test-no-per
+Setting all rngs to seed=0
+buffer is the n-step uniform one   True   want True
+buffer is not prioritised          True   want True
+no total_steps passed to the agent True   want True  (no beta to anneal)
+
+PERQRDQN out of the MRO            True   want True
+_update is QRDQN's (6 args)         True   want True
+_target_quantiles is Munchausen's   True   want True
+
+running 40 steps with reset_every=30:
+[reset] head re-initialised at step 30
+
+ez-greedy committed a walk         True   want True  (15 steps inside a repeat)
+sample() returns 6 tensors         True   want True
+head reset fired                   True   want True
+buffer kept its data               True   want True  (38 transitions)
+
+PASS

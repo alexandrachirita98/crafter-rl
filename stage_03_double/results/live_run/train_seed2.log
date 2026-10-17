@@ -1,0 +1,43 @@
+Setting all rngs to seed=2
+stage stage_03_double  seed 2  steps 200,000  device cuda
+buffer 100,000 transitions = 2.5 GB host RAM
+logging to /tmp/crafter-277476/crafter_reward-stage_03_double/2/stats.jsonl
+[  59][   10000], R/ep=  1.60, eps=1.00, loss=     nan, meanQ=    nan,   123 fps
+[ 118][   20000], R/ep=  1.60, eps=1.00, loss=     nan, meanQ=    nan,   123 fps
+[ 178][   30000], R/ep=  1.80, eps=0.96, loss=  0.0024, meanQ=  0.499,   106 fps
+[ 237][   40000], R/ep=  1.30, eps=0.92, loss=  0.0729, meanQ=  0.936,   100 fps
+[ 293][   50000], R/ep=  2.10, eps=0.89, loss=  0.0284, meanQ=  1.355,    98 fps
+[ 360][   60000], R/ep=  2.10, eps=0.85, loss=  0.0133, meanQ=  1.705,    94 fps
+[ 418][   70000], R/ep=  2.60, eps=0.81, loss=  0.0088, meanQ=  2.242,    93 fps
+[ 478][   80000], R/ep=  2.20, eps=0.77, loss=  0.0297, meanQ=  2.480,    92 fps
+[ 535][   90000], R/ep=  3.40, eps=0.73, loss=  0.1373, meanQ=  2.625,    91 fps
+[ 594][  100000], R/ep=  1.80, eps=0.70, loss=  0.0229, meanQ=  3.315,    91 fps
+[ 649][  110000], R/ep=  2.60, eps=0.66, loss=  0.0435, meanQ=  3.741,    90 fps
+[ 709][  120000], R/ep=  2.60, eps=0.62, loss=  0.0260, meanQ=  4.313,    90 fps
+[ 764][  130000], R/ep=  2.80, eps=0.58, loss=  0.1550, meanQ=  4.187,    89 fps
+[ 820][  140000], R/ep=  2.80, eps=0.54, loss=  0.0699, meanQ=  5.002,    89 fps
+[ 877][  150000], R/ep=  2.70, eps=0.51, loss=  0.0722, meanQ=  5.660,    89 fps
+[ 934][  160000], R/ep=  3.30, eps=0.47, loss=  0.1249, meanQ=  5.350,    89 fps
+[ 986][  170000], R/ep=  3.40, eps=0.43, loss=  0.0927, meanQ=  4.143,    89 fps
+[1041][  180000], R/ep=  3.00, eps=0.39, loss=  0.1851, meanQ=  5.618,    89 fps
+[1099][  190000], R/ep=  3.40, eps=0.35, loss=  0.0383, meanQ=  5.625,    88 fps
+[1155][  200000], R/ep=  3.20, eps=0.32, loss=  0.0708, meanQ=  5.663,    88 fps
+
+done: 1155 episodes in 37.7 min (88 fps)
+score over 1155 episodes: 3.00%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up               90.9%
+  collect_sapling       75.4%
+  place_plant           63.9%
+  collect_wood          55.4%
+  place_table           27.7%
+  collect_drink         24.4%
+  make_wood_pickaxe      5.3%
+  make_wood_sword        4.4%
+  eat_cow                3.0%
+  defeat_zombie          1.4%
+  collect_stone          0.7%
+  place_stone            0.3%
+  collect_coal           0.2%
+  defeat_skeleton        0.1%

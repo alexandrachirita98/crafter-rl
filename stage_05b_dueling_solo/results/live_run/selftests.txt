@@ -1,0 +1,8 @@
+$ python stage_05b_dueling_solo/train.py --test-solo
+agent is DoubleDQN, not n-step   True   want True
+buffer is one-step ReplayMemory  True   want True
+no extra agent kwargs            True   want True
+net is the dueling head          True   want True
+mean_a Q == V, output (4, 17)    True   want True
+
+PASS
