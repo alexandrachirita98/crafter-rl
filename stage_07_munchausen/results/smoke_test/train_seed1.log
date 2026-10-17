@@ -1,0 +1,14 @@
+Setting all rngs to seed=1
+stage stage_07_munchausen  seed 1  steps 2,000  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/claude-1000/-home-alex-crafter-rl/8eefdf8f-d102-49cf-b027-b2550116bc36/scratchpad/sm07/crafter_reward-stage_07_munchausen/1/stats.jsonl
+
+done: 10 episodes in 1.7 min (19 fps)
+score over 10 episodes: 1.36%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up              100.0%
+  collect_sapling       60.0%
+  place_plant           60.0%
+  collect_drink         20.0%
+  collect_wood          20.0%

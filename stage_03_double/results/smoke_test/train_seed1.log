@@ -1,0 +1,18 @@
+$ python stage_03_double/train.py --total-steps 2000 --warmup-steps 500 --buffer-size 5000
+
+Setting all rngs to seed=1
+stage stage_03_double  seed 1  steps 2,000  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to logdir/crafter_reward-stage_03_double/1/stats.jsonl
+
+done: 11 episodes in 1.6 min (21 fps)
+score over 11 episodes: 1.64%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up              100.0%
+  collect_sapling       72.7%
+  place_plant           63.6%
+  collect_wood          36.4%
+  collect_drink          9.1%
+  place_table            9.1%
+exit code: 0

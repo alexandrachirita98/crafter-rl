@@ -1,0 +1,14 @@
+Setting all rngs to seed=1
+stage stage_08_per  seed 1  steps 2,000  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/claude-1000/-home-alex-crafter-rl/8eefdf8f-d102-49cf-b027-b2550116bc36/scratchpad/sm08/crafter_reward-stage_08_per/1/stats.jsonl
+
+done: 11 episodes in 1.9 min (17 fps)
+score over 11 episodes: 1.37%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up              100.0%
+  collect_sapling       72.7%
+  place_plant           63.6%
+  collect_drink         18.2%
+  collect_wood          18.2%

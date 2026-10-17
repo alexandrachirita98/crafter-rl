@@ -1,0 +1,15 @@
+Setting all rngs to seed=1
+stage stage_10c_no_per  seed 1  steps 2,000  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/claude-1000/-home-alex-crafter-rl/3a9895c9-1db1-457f-921c-ac1a722b9874/scratchpad/sm10c/crafter_reward-stage_10c_no_per/1/stats.jsonl
+[reset] head re-initialised at step 1000
+[reset] head re-initialised at step 2000
+
+done: 11 episodes in 1.6 min (21 fps)
+score over 11 episodes: 0.99%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  collect_sapling       63.6%
+  place_plant           54.5%
+  wake_up               54.5%
+  collect_wood          18.2%

@@ -1,0 +1,24 @@
+Setting all rngs to seed=1
+stage stage_06b_qrdqn_solo  seed 1  steps 2,000  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/claude-1000/-home-alex-crafter-rl/8eefdf8f-d102-49cf-b027-b2550116bc36/scratchpad/sm06b/crafter_reward-stage_06b_qrdqn_solo/1/stats.jsonl
+[   0][     200], R/ep=   nan, eps=1.00, loss=     nan, meanQ=    nan,   664 fps
+[   1][     400], R/ep=  2.10, eps=1.00, loss=     nan, meanQ=    nan,   615 fps
+[   2][     600], R/ep=  2.10, eps=1.00, loss=  0.1586, meanQ= -0.000,   119 fps
+[   3][     800], R/ep=  1.77, eps=1.00, loss=  0.5310, meanQ= -0.002,    58 fps
+[   4][    1000], R/ep=  2.10, eps=1.00, loss=  0.1416, meanQ=  0.003,    39 fps
+[   6][    1200], R/ep=  2.10, eps=1.00, loss=  0.4772, meanQ=  0.005,    35 fps
+[   6][    1400], R/ep=  2.10, eps=1.00, loss=  0.0709, meanQ=  0.001,    32 fps
+[   8][    1600], R/ep=  1.97, eps=1.00, loss=  0.4174, meanQ=  0.007,    28 fps
+[   9][    1800], R/ep=  1.88, eps=1.00, loss=  0.4069, meanQ=  0.000,    28 fps
+[  10][    2000], R/ep=  1.90, eps=0.99, loss=  0.0689, meanQ=  0.008,    27 fps
+
+done: 10 episodes in 1.2 min (27 fps)
+score over 10 episodes: 1.34%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up              100.0%
+  collect_sapling       80.0%
+  place_plant           70.0%
+  collect_wood          20.0%
+  collect_drink         10.0%

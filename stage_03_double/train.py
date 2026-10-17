@@ -1,266 +1,64 @@
-"""Stage 03 -- Double DQN.
+"""Stage 03 -- Double DQN, from the lab notebook (section 5, TASK 4).
 
-WHERE: local for a 2000-step smoke test, then RunPod for 200k x 2 seeds
-(about 30 min, about $0.18). Never launch a pod to find out whether it runs.
+van Hasselt, Guez & Silver 2016, https://arxiv.org/abs/1509.06461
 
-WHAT: stage 02 with three lines changed in learn(). Everything else -- the
-network, the buffer, the loop, the hyperparameters -- is stage 02 verbatim, so
-the 200k x 2-seed measurement against stage 02 isolates exactly one variable.
+Stage 02's target takes max over 17 noisy estimates, which is biased upward:
+the action with the luckiest estimate is the one picked, so its error never
+averages away. Double DQN splits the two jobs -- the online net picks the next
+action, the target net says what it is worth:
 
-    van Hasselt, Guez & Silver 2016, "Deep Reinforcement Learning with
-    Double Q-learning", https://arxiv.org/abs/1509.06461
+    a*     = argmax_a' Q_online(s', a')
+    target = r + gamma * mask * Q_target(s', a*)
 
-THE PROBLEM WITH stage 02's TARGET. Plain DQN bootstraps from
-
-    target = r + gamma * mask * max_a' Q_target(s', a')
-
-and that max runs over 17 noisy estimates. The maximum of noisy numbers is
-biased UPWARD: whichever action's noise happened to be positive wins the max,
-so the same estimate both picks the action and vouches for it. The agent
-believes its own luck, Q drifts up, and the overestimation compounds through
-bootstrapping.
-
-THE FIX. Separate CHOOSING from EVALUATING. Two networks already exist -- the
-online net and the frozen target -- so no new machinery is needed:
-
-    a*    = argmax_a' Q_online(s', a')      the online net CHOOSES
-    target = r + gamma * mask * Q_target(s', a*)   the frozen net SCORES
-
-The noise in the two nets is not the same noise, so a lucky estimate in the
-online net no longer vouches for itself. Note what did NOT change: the target
-network still supplies the VALUE, so stage 02's stability argument stands.
-
-WHAT TO EXPECT: a small stabilising gain, not a jump. mean-Q should sit lower
-than stage 02's at the same step -- that is the overestimation going away and
-is the clearest single signal that this stage is wired up correctly. The big
-gain on Crafter is stage 04 (n-step), because the problem there is sparse
-delayed reward rather than biased values.
-
-DONE WHEN, at 200k on 2 seeds: return at least as good as stage 02's, mean-Q
-visibly below stage 02's at matched steps, no new instability. If return is
-flat versus stage 02 but mean-Q dropped, the stage worked -- keep it and say so
-in the deck.
-
-IF IT DOES NOT LEARN, check these, most common first:
-  1. argmax taken on q_target instead of q -> this is plain DQN again, and the
-     numbers will match stage 02 exactly. That match IS the bug signature.
-  2. gather on the wrong net           -> value must come from q_target
-  3. keepdim/squeeze mismatch          -> silent broadcast to (B, B); the loss
-     still decreases, so watch the shapes, not the loss
-  4. the four stage-02 failure modes (permute, /255, mask from `done`, target
-     net never refreshed) all still apply
+Everything else is imported from stage 02, so this stage changes one method.
+Expect a small gain: mean-Q lower than stage 02's at the same step, return
+equal or better. Lower mean-Q at equal return is the result.
 
 Run:
-    # local smoke test, ALWAYS first, about 3 minutes
-    python stage_03_double/train.py --total-steps 2000 \
-        --learning-starts 500 --buffer-size 5000
-
-    # the real run
+    python stage_03_double/train.py --total-steps 2000 --warmup-steps 500 \
+        --buffer-size 5000
     python stage_03_double/train.py --total-steps 200000 --seed 1
 """
 
-import argparse
 import pathlib
 import sys
-import time
 
-import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from common.env import N_ACTIONS, bootstrap_mask, make_env   # noqa: E402
-from common.metrics import ACHIEVEMENTS, score_run           # noqa: E402
-from common.networks import QNetwork                         # noqa: E402
-from common.replay import ReplayBuffer                       # noqa: E402
+from stage_02_dqn.train import DQN, main as stage_02_main
 
 STAGE_ID = 'stage_03_double'
 
 
-def parse_args(argv=None):
-    """Defaults ARE the best hyperparameters, per assignment_v0.pdf 2.1:
-    bare `python train.py` must start the run we actually report.
+class DoubleDQN(DQN):
 
-    Identical to stage 02 on purpose. Double DQN adds no hyperparameter, so
-    the comparison between the two stages has exactly one moving part.
-    """
-    p = argparse.ArgumentParser(
-        description='Stage 03: Double DQN on Crafter.',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    def _update(self, states, actions, rewards, states_, mask):
+        # Both lines stay under no_grad: letting the argmax carry gradients
+        # backprops through the target and destabilises training silently.
+        with torch.no_grad():
+            actions_ = self._estimator(states_).argmax(1, keepdim=True)
+            q_values_ = self._target_estimator(states_)
+        q_values = self._estimator(states)
 
-    p.add_argument('--total-steps', type=int, default=1_000_000,
-                   help='environment steps; the benchmark budget is 1M')
-    p.add_argument('--seed', type=int, default=1)
-    p.add_argument('--logdir', type=str, default='logdir')
-    p.add_argument('--device', type=str, default=None,
-                   help='cuda / cpu. Default: cuda when available')
+        qsa = q_values.gather(1, actions)
+        qsa_ = q_values_.gather(1, actions_)      # the stage-02 line was .max()
 
-    # --- replay -----------------------------------------------------------
-    p.add_argument('--buffer-size', type=int, default=1_000_000,
-                   help='host RAM, ~12GB at 1M. CAP AT 100k FOR LOCAL RUNS')
-    p.add_argument('--learning-starts', type=int, default=20_000,
-                   help='fill the buffer before training on it')
-    p.add_argument('--batch-size', type=int, default=64)
-    p.add_argument('--train-every', type=int, default=1,
-                   help='gradient steps per env step; sweep {1,2,4} once at 200k')
+        target_qsa = rewards + self._gamma * qsa_ * mask
 
-    # --- optimisation -----------------------------------------------------
-    p.add_argument('--gamma', type=float, default=0.99)
-    p.add_argument('--lr', type=float, default=1e-4,
-                   help='Rainbow uses 6.25e-5; 1e-4 learns faster on a short budget')
-    p.add_argument('--adam-eps', type=float, default=1.5e-4,
-                   help="the RL-specific value, NOT torch's 1e-8")
-    p.add_argument('--grad-clip', type=float, default=10.0)
-    p.add_argument('--target-update', type=int, default=2000,
-                   help="DER value; faster than Atari's 8000, the budget is small")
+        loss = (qsa - target_qsa).pow(2).mean()
 
-    # --- exploration ------------------------------------------------------
-    p.add_argument('--eps-start', type=float, default=1.0)
-    p.add_argument('--eps-end', type=float, default=0.05)
-    p.add_argument('--eps-decay-steps', type=int, default=250_000,
-                   help='linear over the first 25%% of a 1M run')
+        self._optimizer.zero_grad()
+        loss.backward()
+        self._optimizer.step()
 
-    p.add_argument('--log-every', type=int, default=10_000)
-    return p.parse_args(argv)
-
-
-def epsilon(step, args):
-    """Linear decay from --eps-start to --eps-end, then flat."""
-    frac = min(1.0, step / max(1, args.eps_decay_steps))
-    return args.eps_start + frac * (args.eps_end - args.eps_start)
-
-
-def learn(q, q_target, opt, buffer, rng, args, device):
-    """One gradient step on the Bellman error. Returns (loss, mean Q).
-
-    THE ONLY DIFFERENCE FROM STAGE 02 is the three lines under no_grad that
-    build the target. Keep it that way: everything below the target is stage
-    02 verbatim so the ablation row means what it says.
-    """
-    obs, act, rew, next_obs, mask = buffer.sample(args.batch_size, rng)
-
-    obs = torch.as_tensor(obs, device=device)
-    next_obs = torch.as_tensor(next_obs, device=device)
-    act = torch.as_tensor(act, device=device)
-    rew = torch.as_tensor(rew, device=device)
-    mask = torch.as_tensor(mask, device=device)
-
-    with torch.no_grad():
-        # DOUBLE DQN. Online net CHOOSES the next action, frozen target net
-        # SCORES it. Stage 02 did both with q_target, which let one lucky
-        # estimate both win the max and vouch for itself.
-        best = q(next_obs).argmax(dim=1, keepdim=True)       # (B, 1)
-        next_q = q_target(next_obs).gather(1, best).squeeze(1)   # (B,)
-        # mask is info['discount']: 0.0 ONLY on death. A 10,000-step timeout
-        # still bootstraps. See common/env.py, THE EPISODE-END TRAP.
-        target = rew + args.gamma * mask * next_q
-
-    pred = q(obs).gather(1, act.unsqueeze(1)).squeeze(1)
-    loss = F.smooth_l1_loss(pred, target)    # Huber: robust to outliers
-
-    opt.zero_grad(set_to_none=True)
-    loss.backward()
-    nn.utils.clip_grad_norm_(q.parameters(), args.grad_clip)
-    opt.step()
-    return loss.item(), pred.mean().item()
+        self.loss = loss.item()
+        self.mean_q = qsa.mean().item()
 
 
 def main(argv=None):
-    args = parse_args(argv)
-    device = torch.device(args.device if args.device else
-                          ('cuda' if torch.cuda.is_available() else 'cpu'))
-
-    logdir = (pathlib.Path(args.logdir) / f'crafter_reward-{STAGE_ID}'
-              / str(args.seed))
-    logdir.mkdir(parents=True, exist_ok=True)
-
-    # Seed everything that draws: torch for the init and any GPU op, one numpy
-    # Generator for both the policy's coin flips and the buffer's sampling.
-    torch.manual_seed(args.seed)
-    rng = np.random.default_rng(args.seed)
-    env = make_env(args.seed, logdir)
-
-    q = QNetwork(N_ACTIONS).to(device)
-    q_target = QNetwork(N_ACTIONS).to(device)
-    q_target.load_state_dict(q.state_dict())
-    q_target.eval()
-    opt = torch.optim.Adam(q.parameters(), lr=args.lr, eps=args.adam_eps)
-
-    buffer = ReplayBuffer(min(args.buffer_size, args.total_steps))
-
-    print(f'stage {STAGE_ID}  seed {args.seed}  steps {args.total_steps:,}  '
-          f'device {device}')
-    print(f'buffer {buffer.capacity:,} frames = {buffer.nbytes() / 1e9:.1f} GB '
-          f'host RAM')
-    print(f'logging to {logdir}/stats.jsonl')
-
-    obs = env.reset()
-    ep_return, ep_len, episodes = 0.0, 0, 0
-    loss, mean_q = float('nan'), float('nan')
-    returns, start = [], time.time()
-
-    for step in range(args.total_steps):
-        # --- act ----------------------------------------------------------
-        eps = epsilon(step, args)
-        if rng.random() < eps:
-            action = int(rng.integers(N_ACTIONS))
-        else:
-            with torch.no_grad():
-                # obs[None] adds the batch axis the conv stack expects.
-                values = q(torch.as_tensor(obs[None], device=device))
-                action = int(values.argmax())
-
-        next_obs, reward, done, info = env.step(action)
-
-        # --- store --------------------------------------------------------
-        # bootstrap_mask, never `0.0 if done else 1.0`: the mask must stay 1.0
-        # when the episode merely hit the 10,000-step cap.
-        buffer.add(obs, action, reward, bootstrap_mask(done, info), done)
-
-        ep_return += reward
-        ep_len += 1
-        obs = next_obs
-
-        if done:
-            episodes += 1
-            returns.append(ep_return)
-            obs = env.reset()
-            ep_return, ep_len = 0.0, 0
-
-        # --- learn --------------------------------------------------------
-        if step >= args.learning_starts and step % args.train_every == 0:
-            loss, mean_q = learn(q, q_target, opt, buffer, rng, args, device)
-
-        # Hard copy of the weights, not a Polyak average: the Nature recipe.
-        if step % args.target_update == 0:
-            q_target.load_state_dict(q.state_dict())
-
-        # --- log ----------------------------------------------------------
-        if (step + 1) % args.log_every == 0:
-            fps = (step + 1) / (time.time() - start)
-            recent = np.mean(returns[-20:]) if returns else float('nan')
-            print(f'step {step + 1:>8,}  ep {episodes:>4}  '
-                  f'return {recent:6.2f}  eps {eps:4.2f}  '
-                  f'loss {loss:8.4f}  meanQ {mean_q:7.3f}  {fps:>5.0f} fps')
-
-    elapsed = time.time() - start
-    print(f'\ndone: {episodes} episodes in {elapsed / 60:.1f} min '
-          f'({args.total_steps / elapsed:.0f} fps)')
-
-    # Same closing report as stages 01 and 02, so the three are read side by
-    # side.
-    stats = logdir / 'stats.jsonl'
-    if stats.exists() and episodes:
-        score, percents, n = score_run(stats)
-        print(f'score over {n} episodes: {score:.2f}%   '
-              f'(random baseline: ~1.6%)')
-        print('\nper-achievement success rate, non-zero only:')
-        for name, pct in sorted(zip(ACHIEVEMENTS, percents),
-                                key=lambda kv: -kv[1]):
-            if pct > 0:
-                print(f'  {name:<20} {pct:5.1f}%')
+    return stage_02_main(argv, agent_cls=DoubleDQN, stage_id=STAGE_ID)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,24 @@
+Setting all rngs to seed=1
+stage stage_05b_dueling_solo  seed 1  steps 2,000  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/claude-1000/-home-alex-crafter-rl/8eefdf8f-d102-49cf-b027-b2550116bc36/scratchpad/sm05b/crafter_reward-stage_05b_dueling_solo/1/stats.jsonl
+[   1][     200], R/ep=  2.10, eps=1.00, loss=     nan, meanQ=    nan,   565 fps
+[   2][     400], R/ep=  1.60, eps=1.00, loss=     nan, meanQ=    nan,   570 fps
+[   3][     600], R/ep=  1.43, eps=1.00, loss=  0.0038, meanQ=  0.069,    88 fps
+[   4][     800], R/ep=  1.60, eps=1.00, loss=  0.0339, meanQ=  0.117,    36 fps
+[   5][    1000], R/ep=  1.70, eps=1.00, loss=  0.0042, meanQ=  0.075,    30 fps
+[   6][    1200], R/ep=  1.60, eps=1.00, loss=  0.0015, meanQ=  0.095,    28 fps
+[   8][    1400], R/ep=  1.47, eps=1.00, loss=  0.0269, meanQ=  0.079,    24 fps
+[   9][    1600], R/ep=  1.54, eps=1.00, loss=  0.0031, meanQ=  0.093,    23 fps
+[  10][    1800], R/ep=  1.50, eps=1.00, loss=  0.0323, meanQ=  0.098,    22 fps
+[  12][    2000], R/ep=  1.40, eps=0.99, loss=  0.0354, meanQ=  0.069,    20 fps
+
+done: 12 episodes in 1.6 min (20 fps)
+score over 12 episodes: 1.19%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up              100.0%
+  collect_sapling       66.7%
+  place_plant           50.0%
+  collect_drink          8.3%
+  collect_wood           8.3%

@@ -1,0 +1,8 @@
+agent carries no n-step        True   want True
+buffer is one-step             True   want True
+net has no duelling split      True   want True
+output is (B, 17, 11)         True   want True
+mask=0 -> target is the reward True   want True
+mask=1 -> reward + gamma*Q(s") True   want True  (one-step, no gamma**n)
+
+PASS

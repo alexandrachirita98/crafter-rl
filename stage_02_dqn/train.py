@@ -1,244 +1,425 @@
-"""Stage 02 -- plain DQN.
+"""Stage 02 -- plain DQN, from the course lab notebook 02_rainbow_sol.ipynb.
 
-WHERE: local for a 2000-step smoke test, then RunPod for 200k x 2 seeds
-(about 30 min, about $0.18). Never launch a pod to find out whether it runs.
+The lab's code kept as-is, adapted where Crafter needs it:
 
-WHAT: Mnih et al. 2015 (Nature 518:529-533), optimised with Adam. A CNN maps
-the 64x64x3 frame to 17 action-values; we act by argmax with epsilon-greedy
-exploration and learn by regressing onto the Bellman target
+  1. Crafter uses the old Gym 4-tuple API: obs, reward, done, info. reset()
+     returns obs alone.
+  2. done is True both on death and on the 10,000-step cap. A timeout must
+     still bootstrap, so transitions store info['discount'] as `mask` and the
+     target multiplies by it instead of by (1 - done).
+  3. The flatten width is measured, not hard-coded -- the lab's 9*16 is sized
+     for MiniGrid's tile view.
+  4. _to_tensor does the permute/batch/to-device that the lab's TorchWrapper
+     did inside the env.
+  5. ReplayMemory stores uint8 numpy frames; the lab's per-step GPU tensors
+     don't scale to 1M.
 
-    target = r + gamma * mask * max_a' Q_target(s', a')
-
-WHY THIS IS STAGE 2, before any of the clever parts:
-
-  "Start small. Implement an algorithm you already have some experience with,
-   such as DQN, optimized with Adam, and only after you convince yourself it's
-   better than random start modding it."   -- assignment_v0.pdf section 2.3
-
-Two pieces of machinery, both from the Nature paper, and the run diverges
-without either:
-
-  REPLAY BUFFER  consecutive Crafter frames are nearly identical, so learning
-                 from them in order makes the network chase its own tail.
-                 common/replay.py.
-  TARGET NETWORK a frozen copy of Q, refreshed every --target-update steps.
-                 Without it we fit a guess to a number computed from that same
-                 guess. This was the paper's main stability contribution.
-
-DONE WHEN, at 200k on 2 seeds: mean return clearly above random's ~2.1; the
-agent reliably gets collect_wood, collect_drink, eat_cow; loss falling and
-mean-Q rising then flattening rather than exploding.
-
-IF IT DOES NOT LEARN, check these four, most common first:
-  1. permute missing          -> convolving the wrong axes (common/networks.py)
-  2. /255 missing             -> saturated ReLUs (common/networks.py)
-  3. mask taken from `done`   -> poisoned timeouts (common/env.bootstrap_mask)
-  4. target net never updated, or updated every step -> no target, or no
-     stability
+MSE loss, no gradient clipping and the biased max target are the lab's and are
+left alone -- stage 03 replaces the target, later stages the loss.
 
 Run:
-    # local smoke test, ALWAYS first, about 3 minutes
-    python stage_02_dqn/train.py --total-steps 2000 \
-        --learning-starts 500 --buffer-size 5000
-
-    # the real run
+    python stage_02_dqn/train.py --total-steps 2000 --warmup-steps 500 \
+        --buffer-size 5000
     python stage_02_dqn/train.py --total-steps 200000 --seed 1
 """
 
 import argparse
+import itertools
 import pathlib
+import random
 import sys
 import time
+from collections import deque
+from copy import deepcopy
 
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.optim as O
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from common.env import N_ACTIONS, bootstrap_mask, make_env   # noqa: E402
-from common.metrics import ACHIEVEMENTS, score_run           # noqa: E402
-from common.networks import QNetwork                         # noqa: E402
-from common.replay import ReplayBuffer                       # noqa: E402
+from common.env import N_ACTIONS, OBS_SHAPE, bootstrap_mask, make_env
+from common.metrics import ACHIEVEMENTS, score_run
 
 STAGE_ID = 'stage_02_dqn'
 
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def parse_args(argv=None):
-    """Defaults ARE the best hyperparameters, per assignment_v0.pdf 2.1:
-    bare `python train.py` must start the run we actually report.
 
-    Values from CleanRL and van Hasselt et al. 2019 (Data-Efficient Rainbow),
-    adapted to a 1M budget. These carry forward through every later stage.
+def reset_rng(seed=42):
+    print(f'Setting all rngs to seed={seed}')
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+
+# ---------------------------------------------------------------- 1. replay
+
+
+class ReplayMemory:
+    """The lab's deque buffer, holding uint8 numpy frames."""
+
+    def __init__(self, size=1000, batch_size=32):
+        self._buffer = deque(maxlen=size)
+        self._batch_size = batch_size
+
+    def push(self, transition):
+        self._buffer.append(transition)
+
+    def sample(self):
+        """-> states, actions, rewards, states_, mask. Frames are uint8."""
+        s, a, r, s_, m = zip(*random.sample(self._buffer, self._batch_size))
+        return (
+            _to_tensor(np.stack(s)),
+            torch.tensor(a, dtype=torch.int64).unsqueeze(1).to(DEVICE),
+            torch.tensor(r, dtype=torch.float32).unsqueeze(1).to(DEVICE),
+            _to_tensor(np.stack(s_)),
+            torch.tensor(m, dtype=torch.float32).unsqueeze(1).to(DEVICE),
+        )
+
+    def __len__(self):
+        return len(self._buffer)
+
+
+def _to_tensor(obs):
+    """uint8 (64,64,3) frame or (N,64,64,3) batch -> (N,3,64,64) on device."""
+    x = torch.from_numpy(np.ascontiguousarray(obs))
+    if x.dim() == 3:
+        x = x.unsqueeze(0)
+    # permute: Crafter gives NHWC, torch convs want NCHW. Getting this wrong
+    # does not crash, it just learns nothing.
+    # contiguous: permute only restrides, and View calls .view(), which needs
+    # contiguous input.
+    return x.permute(0, 3, 1, 2).contiguous().to(DEVICE)
+
+
+# -------------------------------------------------------------- 2. epsilon
+
+
+def get_epsilon_schedule(start=1.0, end=0.1, steps=500):
+    """Linear decay to `end` over `steps`, then flat. Consumed with next()."""
+    eps_step = (start - end) / steps
+
+    def frange(start, end, step):
+        x = start
+        while x > end:
+            yield x
+            x -= step
+
+    return itertools.chain(frange(start, end, eps_step),
+                           itertools.repeat(end))
+
+
+# -------------------------------------------------------------- 3. network
+
+
+class ByteToFloat(nn.Module):
+    def forward(self, x):
+        assert x.dtype == torch.uint8, \
+            'The model expects states of type ByteTensor.'
+        return x.float().div_(255)
+
+
+class View(nn.Module):
+    def forward(self, x):
+        return x.view(x.size(0), -1)
+
+
+def get_estimator(action_num, input_ch=3, lin_size=32, stride=1):
+    """The lab's 3-conv net, flatten width measured by a probe.
+
+    stride=1 is the lab's architecture. On 64x64 input its convs barely
+    downsample (-> 60x60), so the flatten is 57,600 and the first linear layer
+    is 3.7M params. stride=2 gives 784 and ~54k, and runs ~5x faster. Default
+    stays at the lab's value; report it in the ablation table if you change it.
     """
+    conv = nn.Sequential(
+        ByteToFloat(),
+        nn.Conv2d(input_ch, 16, kernel_size=3, stride=stride),
+        nn.ReLU(inplace=True),
+        nn.Conv2d(16, 16, kernel_size=2, stride=stride),
+        nn.ReLU(inplace=True),
+        nn.Conv2d(16, 16, kernel_size=2, stride=stride),
+        nn.ReLU(inplace=True),
+        View(),
+    )
+    with torch.no_grad():
+        probe = torch.zeros(1, input_ch, OBS_SHAPE[0], OBS_SHAPE[1],
+                            dtype=torch.uint8)
+        flat = conv(probe).shape[1]
+    return nn.Sequential(
+        conv,
+        nn.Linear(flat, lin_size),
+        nn.ReLU(inplace=True),
+        nn.Linear(lin_size, action_num),
+    ).to(DEVICE)
+
+
+# ------------------------------------------------------------------ 4. DQN
+
+
+class DQN:
+    """The lab's DQN. learn() takes `mask` where the lab takes `done`."""
+
+    def __init__(
+        self,
+        estimator,
+        buffer,
+        optimizer,
+        epsilon_schedule,
+        action_num,
+        gamma=0.92,
+        update_steps=4,
+        update_target_steps=10,
+        warmup_steps=100,
+    ):
+        self._estimator = estimator
+        self._target_estimator = deepcopy(estimator)
+        self._buffer = buffer
+        self._optimizer = optimizer
+        self._epsilon = epsilon_schedule
+        self._action_num = action_num
+        self._gamma = gamma
+        self._update_steps = update_steps
+        self._update_target_steps = update_target_steps
+        self._warmup_steps = warmup_steps
+        self._step_cnt = 0
+        # for the log line; NaN until the first gradient step
+        self.loss = float('nan')
+        self.mean_q = float('nan')
+        self.eps = 1.0
+        assert warmup_steps > self._buffer._batch_size, (
+            'You should have at least a batch in the ER.')
+
+    def step(self, state):
+        """Epsilon-greedy. `state` is a raw uint8 (64,64,3) numpy frame."""
+        if self._step_cnt < self._warmup_steps:
+            return torch.randint(self._action_num, (1,)).item()
+
+        self.eps = next(self._epsilon)
+        if self.eps < torch.rand(1).item():
+            with torch.no_grad():
+                qvals = self._estimator(_to_tensor(state))
+                return qvals.argmax().item()
+        else:
+            return torch.randint(self._action_num, (1,)).item()
+
+    def learn(self, state, action, reward, state_, mask):
+        self._store(state, action, reward, state_, mask)
+
+        if self._step_cnt < self._warmup_steps:
+            self._step_cnt += 1
+            return
+
+        if self._step_cnt % self._update_steps == 0:
+            batch = self._buffer.sample()
+            self._update(*batch)
+
+        # update the target estimator
+        if self._step_cnt % self._update_target_steps == 0:
+            self._target_estimator.load_state_dict(
+                self._estimator.state_dict())
+
+        self._step_cnt += 1
+
+    def _store(self, state, action, reward, state_, mask):
+        """One-step: push as-is. Stage 04 keeps an n-step window here."""
+        self._buffer.push((state, action, reward, state_, mask))
+
+    def end_episode(self):
+        """train() calls this on every done. One-step has nothing to do."""
+
+    def _update(self, states, actions, rewards, states_, mask):
+        """Stage 03 overrides this method and nothing else."""
+        q_values = self._estimator(states)
+        with torch.no_grad():
+            q_values_ = self._target_estimator(states_)
+
+        qsa = q_values.gather(1, actions)
+        qsa_ = q_values_.max(1, keepdim=True)[0]
+
+        # mask is info['discount']: 0.0 only on death, so a timeout still
+        # bootstraps. The lab's (1 - done) would zero it.
+        target_qsa = rewards + self._gamma * qsa_ * mask
+
+        loss = (qsa - target_qsa).pow(2).mean()
+
+        self._optimizer.zero_grad()
+        loss.backward()
+        self._optimizer.step()
+
+        self.loss = loss.item()
+        self.mean_q = qsa.mean().item()
+
+
+# ----------------------------------------------------------------- 5. loop
+
+
+def train(agent, env, step_num=100_000, log_every=10_000):
+    """The lab's loop on Crafter's 4-tuple API.
+
+    Logs at a fixed interval rather than per episode, since Crafter episodes
+    run to thousands of steps and stats.jsonl is the real record.
+    """
+    stats = {'step_idx': [0], 'ep_rewards': [0.0], 'ep_steps': [0.0]}
+    N = 0
+    state, done = env.reset(), False
+    start = time.time()
+
+    for step in range(step_num):
+
+        action = agent.step(state)
+
+        state_, reward, done, info = env.step(action)
+
+        agent.learn(state, action, reward, state_,
+                    bootstrap_mask(done, info))
+
+        state = state_
+
+        # stats
+        stats['ep_rewards'][N] += reward
+        stats['ep_steps'][N] += 1
+
+        if done:
+            agent.end_episode()
+            state, done = env.reset(), False
+
+            stats['ep_rewards'].append(0.0)
+            stats['ep_steps'].append(0.0)
+            stats['step_idx'].append(step)
+            N += 1
+
+        if (step + 1) % log_every == 0:
+            fps = (step + 1) / (time.time() - start)
+            recent = stats['ep_rewards'][-11:-1] or [float('nan')]
+            print('[{0:4d}][{1:8d}], R/ep={2:6.2f}, eps={3:4.2f}, '
+                  'loss={4:8.4f}, meanQ={5:7.3f}, {6:5.0f} fps'.format(
+                      N, step + 1,
+                      float(np.mean(recent)), agent.eps,
+                      agent.loss, agent.mean_q, fps), flush=True)
+
+    stats['agent'] = [agent.__class__.__name__ for _ in range(N + 1)]
+    return stats, N, time.time() - start
+
+
+# ------------------------------------------------------------------ 6. main
+
+
+def parse_args(argv=None, extra_args=None):
     p = argparse.ArgumentParser(
-        description='Stage 02: plain DQN on Crafter.',
+        description='Stage 02: the course lab DQN, on Crafter.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     p.add_argument('--total-steps', type=int, default=1_000_000,
                    help='environment steps; the benchmark budget is 1M')
     p.add_argument('--seed', type=int, default=1)
     p.add_argument('--logdir', type=str, default='logdir')
-    p.add_argument('--device', type=str, default=None,
-                   help='cuda / cpu. Default: cuda when available')
 
-    # --- replay -----------------------------------------------------------
-    p.add_argument('--buffer-size', type=int, default=1_000_000,
-                   help='host RAM, ~12GB at 1M. CAP AT 100k FOR LOCAL RUNS')
-    p.add_argument('--learning-starts', type=int, default=20_000,
-                   help='fill the buffer before training on it')
-    p.add_argument('--batch-size', type=int, default=64)
-    p.add_argument('--train-every', type=int, default=1,
-                   help='gradient steps per env step; sweep {1,2,4} once at 200k')
+    p.add_argument('--buffer-size', type=int, default=100_000,
+                   help='transitions; 2 uint8 frames each, 100k = 2.5 GB')
+    p.add_argument('--batch-size', type=int, default=32,
+                   help="the lab's value")
+    p.add_argument('--warmup-steps', type=int, default=20_000,
+                   help='uniform-random actions, filling the buffer')
+    p.add_argument('--update-steps', type=int, default=2,
+                   help="gradient step every N env steps; the lab's value")
+    p.add_argument('--update-target-steps', type=int, default=2000,
+                   help='target-net refresh; DER value. The lab uses 8-256, '
+                        'far too fast for a 1M budget')
 
-    # --- optimisation -----------------------------------------------------
-    p.add_argument('--gamma', type=float, default=0.99)
+    p.add_argument('--gamma', type=float, default=0.99,
+                   help='the lab uses 0.92 on 100-step MiniGrid episodes')
     p.add_argument('--lr', type=float, default=1e-4,
-                   help='Rainbow uses 6.25e-5; 1e-4 learns faster on a short budget')
-    p.add_argument('--adam-eps', type=float, default=1.5e-4,
-                   help="the RL-specific value, NOT torch's 1e-8")
-    p.add_argument('--grad-clip', type=float, default=10.0)
-    p.add_argument('--target-update', type=int, default=2000,
-                   help="DER value; faster than Atari's 8000, the budget is small")
+                   help="the lab's 1e-3 diverges on a 64x64 input")
+    p.add_argument('--adam-eps', type=float, default=1e-4,
+                   help="the lab's value")
+    p.add_argument('--lin-size', type=int, default=64,
+                   help="width of the estimator's hidden layer")
+    p.add_argument('--stride', type=int, default=1,
+                   help="conv stride. 1 is the lab's net (3.7M params); "
+                        '2 gives ~54k and runs ~5x faster')
 
-    # --- exploration ------------------------------------------------------
     p.add_argument('--eps-start', type=float, default=1.0)
     p.add_argument('--eps-end', type=float, default=0.05)
     p.add_argument('--eps-decay-steps', type=int, default=250_000,
                    help='linear over the first 25%% of a 1M run')
 
     p.add_argument('--log-every', type=int, default=10_000)
+
+    # A later stage adds its own flags here; see stage_04_nstep/train.py.
+    if extra_args is not None:
+        extra_args(p)
     return p.parse_args(argv)
 
 
-def epsilon(step, args):
-    """Linear decay from --eps-start to --eps-end, then flat."""
-    frac = min(1.0, step / max(1, args.eps_decay_steps))
-    return args.eps_start + frac * (args.eps_end - args.eps_start)
+def report(logdir, episodes):
+    stats = logdir / 'stats.jsonl'
+    if not (stats.exists() and episodes):
+        return
+    score, percents, n = score_run(stats)
+    print(f'score over {n} episodes: {score:.2f}%   (random baseline: ~1.6%)')
+    print('\nper-achievement success rate, non-zero only:')
+    for name, pct in sorted(zip(ACHIEVEMENTS, percents),
+                            key=lambda kv: -kv[1]):
+        if pct > 0:
+            print(f'  {name:<20} {pct:5.1f}%')
 
 
-def learn(q, q_target, opt, buffer, rng, args, device):
-    """One gradient step on the Bellman error. Returns (loss, mean Q)."""
-    obs, act, rew, next_obs, mask = buffer.sample(args.batch_size, rng)
+def build(args, capacity):
+    """Network, buffer and extra agent kwargs. Stage 02's choices.
 
-    obs = torch.as_tensor(obs, device=device)
-    next_obs = torch.as_tensor(next_obs, device=device)
-    act = torch.as_tensor(act, device=device)
-    rew = torch.as_tensor(rew, device=device)
-    mask = torch.as_tensor(mask, device=device)
-
-    with torch.no_grad():
-        # The frozen copy supplies the target. Using q here instead of
-        # q_target is failure mode 4 in the module docstring.
-        next_q = q_target(next_obs).max(dim=1).values
-        # mask is info['discount']: 0.0 ONLY on death. A 10,000-step timeout
-        # still bootstraps. See common/env.py, THE EPISODE-END TRAP.
-        target = rew + args.gamma * mask * next_q
-
-    pred = q(obs).gather(1, act.unsqueeze(1)).squeeze(1)
-    loss = F.smooth_l1_loss(pred, target)    # Huber: robust to outliers
-
-    opt.zero_grad(set_to_none=True)
-    loss.backward()
-    nn.utils.clip_grad_norm_(q.parameters(), args.grad_clip)
-    opt.step()
-    return loss.item(), pred.mean().item()
+    A later stage passes its own build to main() to swap the net or the
+    buffer, and returns extra constructor kwargs in the third slot.
+    """
+    net = get_estimator(N_ACTIONS, lin_size=args.lin_size, stride=args.stride)
+    buffer = ReplayMemory(size=capacity, batch_size=args.batch_size)
+    return net, buffer, {}
 
 
-def main(argv=None):
-    args = parse_args(argv)
-    device = torch.device(args.device if args.device else
-                          ('cuda' if torch.cuda.is_available() else 'cpu'))
+def main(argv=None, agent_cls=DQN, stage_id=STAGE_ID, extra_args=None,
+         build=build):
+    args = parse_args(argv, extra_args)
 
-    logdir = (pathlib.Path(args.logdir) / f'crafter_reward-{STAGE_ID}'
+    logdir = (pathlib.Path(args.logdir) / f'crafter_reward-{stage_id}'
               / str(args.seed))
     logdir.mkdir(parents=True, exist_ok=True)
 
-    # Seed everything that draws: torch for the init and any GPU op, one numpy
-    # Generator for both the policy's coin flips and the buffer's sampling.
-    torch.manual_seed(args.seed)
-    rng = np.random.default_rng(args.seed)
+    reset_rng(args.seed)
     env = make_env(args.seed, logdir)
 
-    q = QNetwork(N_ACTIONS).to(device)
-    q_target = QNetwork(N_ACTIONS).to(device)
-    q_target.load_state_dict(q.state_dict())
-    q_target.eval()
-    opt = torch.optim.Adam(q.parameters(), lr=args.lr, eps=args.adam_eps)
+    capacity = min(args.buffer_size, args.total_steps)
+    frame_bytes = int(np.prod(OBS_SHAPE))
+    print(f'stage {stage_id}  seed {args.seed}  '
+          f'steps {args.total_steps:,}  device {DEVICE}')
+    # 2 frames per transition: the deque stores state and state_ separately.
+    # Priced before allocating, since allocating to find out is the crash.
+    print(f'buffer {capacity:,} transitions = '
+          f'{2 * capacity * frame_bytes / 1e9:.1f} GB host RAM')
+    print(f'logging to {logdir}/stats.jsonl', flush=True)
 
-    buffer = ReplayBuffer(min(args.buffer_size, args.total_steps))
+    net, buffer, extra = build(args, capacity)
+    agent = agent_cls(
+        net,
+        buffer,
+        O.Adam(net.parameters(), lr=args.lr, eps=args.adam_eps),
+        get_epsilon_schedule(start=args.eps_start, end=args.eps_end,
+                             steps=args.eps_decay_steps),
+        N_ACTIONS,
+        gamma=args.gamma,
+        warmup_steps=args.warmup_steps,
+        update_steps=args.update_steps,
+        update_target_steps=args.update_target_steps,
+        **extra,
+    )
 
-    print(f'stage {STAGE_ID}  seed {args.seed}  steps {args.total_steps:,}  '
-          f'device {device}')
-    print(f'buffer {buffer.capacity:,} frames = {buffer.nbytes() / 1e9:.1f} GB '
-          f'host RAM')
-    print(f'logging to {logdir}/stats.jsonl')
+    _, episodes, elapsed = train(agent, env, step_num=args.total_steps,
+                                 log_every=args.log_every)
 
-    obs = env.reset()
-    ep_return, ep_len, episodes = 0.0, 0, 0
-    loss, mean_q = float('nan'), float('nan')
-    returns, start = [], time.time()
-
-    for step in range(args.total_steps):
-        # --- act ----------------------------------------------------------
-        eps = epsilon(step, args)
-        if rng.random() < eps:
-            action = int(rng.integers(N_ACTIONS))
-        else:
-            with torch.no_grad():
-                # obs[None] adds the batch axis the conv stack expects.
-                values = q(torch.as_tensor(obs[None], device=device))
-                action = int(values.argmax())
-
-        next_obs, reward, done, info = env.step(action)
-
-        # --- store --------------------------------------------------------
-        # bootstrap_mask, never `0.0 if done else 1.0`: the mask must stay 1.0
-        # when the episode merely hit the 10,000-step cap.
-        buffer.add(obs, action, reward, bootstrap_mask(done, info), done)
-
-        ep_return += reward
-        ep_len += 1
-        obs = next_obs
-
-        if done:
-            episodes += 1
-            returns.append(ep_return)
-            obs = env.reset()
-            ep_return, ep_len = 0.0, 0
-
-        # --- learn --------------------------------------------------------
-        if step >= args.learning_starts and step % args.train_every == 0:
-            loss, mean_q = learn(q, q_target, opt, buffer, rng, args, device)
-
-        # Hard copy of the weights, not a Polyak average: the Nature recipe.
-        if step % args.target_update == 0:
-            q_target.load_state_dict(q.state_dict())
-
-        # --- log ----------------------------------------------------------
-        if (step + 1) % args.log_every == 0:
-            fps = (step + 1) / (time.time() - start)
-            recent = np.mean(returns[-20:]) if returns else float('nan')
-            print(f'step {step + 1:>8,}  ep {episodes:>4}  '
-                  f'return {recent:6.2f}  eps {eps:4.2f}  '
-                  f'loss {loss:8.4f}  meanQ {mean_q:7.3f}  {fps:>5.0f} fps')
-
-    elapsed = time.time() - start
     print(f'\ndone: {episodes} episodes in {elapsed / 60:.1f} min '
           f'({args.total_steps / elapsed:.0f} fps)')
-
-    # Same closing report as stage 01, so the two are read side by side.
-    stats = logdir / 'stats.jsonl'
-    if stats.exists() and episodes:
-        score, percents, n = score_run(stats)
-        print(f'score over {n} episodes: {score:.2f}%   '
-              f'(random baseline: ~1.6%)')
-        print('\nper-achievement success rate, non-zero only:')
-        for name, pct in sorted(zip(ACHIEVEMENTS, percents),
-                                key=lambda kv: -kv[1]):
-            if pct > 0:
-                print(f'  {name:<20} {pct:5.1f}%')
+    report(logdir, episodes)
 
 
 if __name__ == '__main__':

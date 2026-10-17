@@ -1,0 +1,19 @@
+agent carries no n-step        True   want True
+agent carries no quantiles     True   want True
+Setting all rngs to seed=0
+
+shift keeps (8, 3, 64, 64) uint8  True   want True
+shift actually moves pixels        True   want True
+
+running 40 steps with reset_every=30:
+step       30  RESET: re-initialised 2 head layer(s), buffer kept (30 frames)
+step       40  RESET: re-initialised 2 head layer(s), buffer kept (40 frames)
+
+at the reset step:
+  head re-initialised      True   want True
+  target net re-synced     True   want True
+  buffer kept its frames   30 frames  want > 0
+  resets fired in 40 steps  1  want 1
+_reset_head touches 2 Linear layer(s), all 3 convs untouched True   want True
+
+PASS

@@ -1,0 +1,454 @@
+"""Stage 11 -- CONTRIBUTION 1: an auxiliary head predicting what unlocks next.
+
+Ours. The idea is the UNREAL one (Jaderberg et al. 2017,
+https://arxiv.org/abs/1611.05397): reward in Crafter arrives maybe once every
+few hundred steps, which is a starvation diet for a conv trunk that has to
+learn to see trees, stone and zombies. But the environment hands us the
+achievement state on every single step, free, and nothing is training on it.
+
+So: a second head on the SHARED trunk, 23-way classification of "which
+achievement unlocks within the next `horizon` steps", class 22 meaning "none
+soon". To predict "a stone pickaxe is coming" the trunk must represent "I hold
+wood and I am standing near stone" -- which is exactly the perception the main
+task needs. The action-selection path is untouched; only the gradient reaching
+the trunk changes.
+
+Why this works for us and not for PPO -- the question an examiner will ask,
+since Moon et al. 2023 needed an episodic memory for the same trick: our labels
+come from looking FORWARD in the replay buffer. PPO throws its experience away
+after a few epochs. The buffer is a DQN thing and it is what makes the simple
+version possible.
+
+Three differences from the sketch in docs/implementation-guide.md section 5,
+all forced by what stages 04-10 actually built:
+
+  1. The guide indexes labels out of the buffer after the fact. Our buffer is a
+     ring of opaque tuples with no stable index into the future, so the label
+     is computed at STORE time instead, from a lookahead window the agent
+     keeps alongside stage 04's n-step window. Same label, no buffer surgery.
+  2. The transition tuple grows to seven: (s, a, G, s_n, mask, n, y). Both the
+     n-step deque and the prioritised ring carry it.
+  3. The head hangs off QRDuelingNet.trunk, not a 512-wide feature vector --
+     stage 02's measured flatten width is whatever the probe said.
+
+Run:
+    python stage_11_c1_achievement_aux/train.py --test-aux
+    python stage_11_c1_achievement_aux/train.py --total-steps 2000 \
+        --warmup-steps 500 --buffer-size 5000
+    python stage_11_c1_achievement_aux/train.py --total-steps 200000 --seed 1 \
+        --lambda-aux 0.1
+"""
+
+import pathlib
+import random
+import sys
+from collections import deque
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
+
+from common.metrics import ACHIEVEMENTS
+from stage_02_dqn.train import DEVICE, N_ACTIONS, _to_tensor, main as stage_02_main
+from stage_06_qrdqn.train import QRDuelingNet
+from stage_08_per.train import PrioritizedReplayMemory
+from stage_10_drq_resets.train import (DrQResets, build as build_10,
+                                       extra_args as extra_10, random_shift)
+
+STAGE_ID = 'stage_11_c1_achievement_aux'
+
+N_ACH = len(ACHIEVEMENTS)       # 22
+NONE_SOON = N_ACH               # class 22, the "nothing happens" bucket
+N_AUX_CLASSES = N_ACH + 1       # 23
+
+
+# ------------------------------------------------------- 1. the labeller
+
+
+class AchievementLabeller:
+    """Turns the per-step achievement counts into "what unlocks next" labels.
+
+    Holds a lookahead window of pending transitions. A transition is only
+    emitted once we have seen `horizon` further steps, or the episode ended --
+    we must never look across an episode boundary, since the next episode is a
+    different world and its unlocks say nothing about this state.
+
+    Counts are cumulative within an episode (crafter increments them), so
+    "newly unlocked" is count[t + k] > count[t], not count[t + k] > 0.
+    """
+
+    def __init__(self, horizon=100):
+        self._horizon = horizon
+        self._pending = deque()     # (payload, counts_at_that_step)
+        self._future = deque()      # counts for the steps already seen
+
+    def push(self, payload, counts):
+        """Queue one transition. Returns the list of (payload, label) ready."""
+        self._pending.append((payload, counts))
+        self._future.append(counts)
+        out = []
+        # The oldest pending item has `len(self._future) - 1` steps of future
+        # behind it; emit it once that reaches the horizon.
+        while len(self._future) > self._horizon:
+            payload0, base = self._pending.popleft()
+            self._future.popleft()
+            out.append((payload0, self._label(base)))
+        return out
+
+    def flush(self):
+        """Episode over. Emit everything on the shorter future we have."""
+        out = []
+        while self._pending:
+            payload0, base = self._pending.popleft()
+            self._future.popleft()
+            out.append((payload0, self._label(base)))
+        self._future.clear()
+        return out
+
+    def _label(self, base):
+        """First achievement whose count rises above `base` within the window."""
+        for counts in self._future:
+            newly = counts > base
+            if newly.any():
+                return int(np.argmax(newly))
+        return NONE_SOON
+
+
+def counts_vector(info):
+    """info['achievements'] -> the 22-vector, in common.metrics order."""
+    ach = info['achievements']
+    return np.array([ach[name] for name in ACHIEVEMENTS], dtype=np.int32)
+
+
+# ----------------------------------------------------------- 2. the net
+
+
+class AuxQRDuelingNet(QRDuelingNet):
+    """Stage 06's net plus a 23-way head on the same trunk.
+
+    forward() is untouched, so every stage 02-10 code path -- step(),
+    _per_sample, _target_quantiles -- behaves exactly as before. The aux head
+    is reached only through aux_logits().
+    """
+
+    def __init__(self, action_num, n_quantiles=51, lin_size=64, stride=1,
+                 aux_hidden=256):
+        super().__init__(action_num, n_quantiles=n_quantiles,
+                         lin_size=lin_size, stride=stride)
+        flat = self.value[0].in_features       # stage 02's probed width
+        self.aux = nn.Sequential(
+            nn.Linear(flat, aux_hidden), nn.ReLU(inplace=True),
+            nn.Linear(aux_hidden, N_AUX_CLASSES))
+
+    def aux_logits(self, x):
+        return self.aux(self.trunk(x))
+
+
+# -------------------------------------------------------- 3. the buffers
+
+
+class AuxNStepMixin:
+    """Seven-tuples: the stage-04 six plus the aux label."""
+
+    def _unpack(self, rows):
+        s, a, g, s_, m, n, y = zip(*rows)
+        col = lambda v, dt: torch.tensor(
+            np.asarray(v), dtype=dt).unsqueeze(1).to(DEVICE)
+        return (_to_tensor(np.stack(s)), col(a, torch.int64),
+                col(g, torch.float32), _to_tensor(np.stack(s_)),
+                col(m, torch.float32), col(n, torch.float32),
+                torch.tensor(np.asarray(y), dtype=torch.int64).to(DEVICE))
+
+
+class AuxPrioritizedReplayMemory(AuxNStepMixin, PrioritizedReplayMemory):
+    """Stage 08's ring and sum-tree, carrying the label through sample()."""
+
+    def sample(self):
+        B, total = self._batch_size, self._tree.total()
+        prefix = (np.arange(B) + np.random.rand(B)) * total / B
+        idx = self._tree.find(prefix)
+        p = self._tree.nodes[self._tree.size + idx] / total
+        w = (self._len * p) ** -self.beta
+        w = w / w.max()
+        cols = self._unpack([self._buffer[i] for i in idx])
+        weights = torch.tensor(w, dtype=torch.float32).unsqueeze(1).to(DEVICE)
+        return (*cols, idx, weights)
+
+
+# ---------------------------------------------------------- 4. the agent
+
+
+class AuxDrQResets(DrQResets):
+    """Stage 10, plus the auxiliary loss on the shared trunk."""
+
+    def __init__(self, *args, lambda_aux=0.1, aux_horizon=100,
+                 aux_none_weight=0.1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lambda_aux = lambda_aux
+        self._labeller = AchievementLabeller(horizon=aux_horizon)
+        # Class imbalance: most steps really are "none soon", so without this
+        # the head learns to always answer 22 and the trunk learns nothing.
+        # We down-weight the majority class rather than subsample it -- the
+        # design choice the slide has to name.
+        weight = torch.ones(N_AUX_CLASSES, device=DEVICE)
+        weight[NONE_SOON] = aux_none_weight
+        self._aux_weight = weight
+        self._pending_counts = None     # set by learn() each step
+        # logged alongside loss/meanQ
+        self.aux_loss = float('nan')
+        self.aux_acc = float('nan')
+        self.aux_major = float('nan')
+
+    # -- storing: route stage 04's emitted transitions through the labeller --
+
+    def learn(self, state, action, reward, state_, mask, counts=None):
+        """train_aux() passes the achievement counts for this step."""
+        self._pending_counts = counts
+        if self._step_cnt >= self._warmup_steps and len(self._buffer) == 0:
+            # Stage 02 sizes warmup against the batch, but stage 04's n-step
+            # window and stage 11's lookahead both hold transitions back, so
+            # a short run can reach the end of warmup with nothing stored.
+            # Sampling here draws unwritten rows. Store and wait instead.
+            self._store(state, action, reward, state_, mask)
+            self._step_cnt += 1
+            return
+        super().learn(state, action, reward, state_, mask)
+
+    def _buffer_push(self, transition):
+        """Hold stage 04's six-tuple until its label is known, then push."""
+        counts = self._pending_counts
+        if counts is None:                      # self-test path
+            counts = np.zeros(N_ACH, dtype=np.int32)
+        for payload, label in self._labeller.push(transition, counts):
+            self._buffer.push((*payload, label))
+
+    def _emit(self):
+        """Stage 04's _emit, with the push redirected through the labeller."""
+        G = 0.0
+        for k, (_, _, r, _, _) in enumerate(self._window):
+            G += self._gamma ** k * r
+        s0, a0 = self._window[0][0], self._window[0][1]
+        _, _, _, s_n, mask_n = self._window[-1]
+        self._buffer_push((s0, a0, G, s_n, mask_n, len(self._window)))
+        self._window.popleft()
+
+    def end_episode(self):
+        super().end_episode()                   # flushes the n-step window
+        # Labels for the tail are computed on a shorter future, which is
+        # correct: the episode genuinely ends there.
+        for payload, label in self._labeller.flush():
+            self._buffer.push((*payload, label))
+
+    # -- learning: one extra loss term ------------------------------------
+
+    def _update(self, states, actions, rewards, states_, mask, n, labels,
+                idx, weights):
+        from common.replay import beta_by_step
+        self._buffer.beta = beta_by_step(self._step_cnt, self._total_steps)
+
+        pred, per_sample = self._per_sample(states, actions, rewards,
+                                            states_, mask, n)
+        rl_loss = (weights.squeeze(1) * per_sample).mean()
+
+        # The aux head sees the same augmented view the RL loss does, so the
+        # trunk is not asked to be invariant for one task and not the other.
+        logits = self._estimator.aux_logits(random_shift(states))
+        aux_loss = F.cross_entropy(logits, labels, weight=self._aux_weight)
+
+        (rl_loss + self._lambda_aux * aux_loss).backward()
+        self._optimizer.step()
+        self._optimizer.zero_grad()
+
+        self._buffer.update_priorities(idx, per_sample.detach().cpu().numpy())
+        self.loss = rl_loss.item()
+        self.mean_q = pred.mean().item()
+        self.aux_loss = aux_loss.item()
+        with torch.no_grad():
+            self.aux_acc = (logits.argmax(1) == labels).float().mean().item()
+            # The honest baseline is not 1/23, it is "always say none soon".
+            self.aux_major = (labels == NONE_SOON).float().mean().item()
+
+
+# ----------------------------------------------------------- 5. the loop
+
+
+def train_aux(agent, env, step_num=100_000, log_every=10_000):
+    """Stage 02's loop, passing info['achievements'] down to the labeller."""
+    import time
+    N = 0
+    ep_rewards = [0.0]
+    state, done = env.reset(), False
+    start = time.time()
+
+    for step in range(step_num):
+        action = agent.step(state)
+        state_, reward, done, info = env.step(action)
+        from common.env import bootstrap_mask
+        agent.learn(state, action, reward, state_, bootstrap_mask(done, info),
+                    counts=counts_vector(info))
+        state = state_
+        ep_rewards[N] += reward
+
+        if done:
+            agent.end_episode()
+            state, done = env.reset(), False
+            ep_rewards.append(0.0)
+            N += 1
+
+        if (step + 1) % log_every == 0:
+            fps = (step + 1) / (time.time() - start)
+            recent = ep_rewards[-11:-1] or [float('nan')]
+            print('[{0:4d}][{1:8d}], R/ep={2:6.2f}, eps={3:4.2f}, '
+                  'loss={4:8.4f}, meanQ={5:7.3f}, aux={6:6.3f}, '
+                  'acc={7:4.1%} (majority {8:4.1%}), {9:5.0f} fps'.format(
+                      N, step + 1, float(np.mean(recent)), agent.eps,
+                      agent.loss, agent.mean_q, agent.aux_loss,
+                      agent.aux_acc, agent.aux_major, fps), flush=True)
+
+    return None, N, time.time() - start
+
+
+def extra_args(p):
+    extra_10(p)
+    p.add_argument('--lambda-aux', type=float, default=0.1,
+                   help='weight on the auxiliary loss. 0 is the control')
+    p.add_argument('--aux-horizon', type=int, default=100,
+                   help='steps to look ahead for the next unlock')
+    p.add_argument('--aux-none-weight', type=float, default=0.1,
+                   help='cross-entropy weight on class 22 ("none soon")')
+    p.add_argument('--test-aux', action='store_true',
+                   help='check the labeller and one aux gradient, then exit')
+
+
+def build(args, capacity):
+    _, _, extra = build_10(args, capacity)
+    net = AuxQRDuelingNet(N_ACTIONS, n_quantiles=args.n_quantiles,
+                          lin_size=args.lin_size, stride=args.stride).to(DEVICE)
+    buffer = AuxPrioritizedReplayMemory(size=capacity,
+                                        batch_size=args.batch_size,
+                                        alpha=args.per_alpha)
+    return net, buffer, dict(extra, lambda_aux=args.lambda_aux,
+                             aux_horizon=args.aux_horizon,
+                             aux_none_weight=args.aux_none_weight)
+
+
+# ------------------------------------------------------------- self-test
+
+
+def test_aux(horizon=3):
+    """Two halves: the labeller's arithmetic, then a real gradient step.
+
+    The labeller is the part that is easy to get silently wrong -- an
+    off-by-one in the window, or a label leaking across the episode boundary,
+    produces a head that trains happily on garbage.
+    """
+    ok = True
+
+    # -- half one: scripted counts, hand-checked labels -------------------
+    # 6 steps. collect_wood (index 6) rises at step 2, place_table (20) at
+    # step 5. With horizon=3, step t sees the counts of steps t..t+3.
+    names = {n: i for i, n in enumerate(ACHIEVEMENTS)}
+    seq = []
+    c = np.zeros(N_ACH, dtype=np.int32)
+    for t in range(6):
+        if t == 2:
+            c = c.copy(); c[names['collect_wood']] += 1
+        if t == 5:
+            c = c.copy(); c[names['place_table']] += 1
+        seq.append(c)
+
+    lab = AchievementLabeller(horizon=horizon)
+    got = []
+    for t, c in enumerate(seq):
+        got += [(p, y) for p, y in lab.push(f't{t}', c)]
+    got += lab.flush()
+
+    want = [('t0', names['collect_wood']),   # wood at t2, within 3
+            ('t1', names['collect_wood']),   # wood at t2, within 3
+            ('t2', names['place_table']),    # table at t5, exactly 3 ahead
+            ('t3', names['place_table']),
+            ('t4', names['place_table']),
+            ('t5', NONE_SOON)]               # nothing after it
+    print(f'labeller, horizon={horizon}, wood at t2 and table at t5')
+    print(f'{"step":>5} {"label":>22} {"want":>22}')
+    for (p, y), (wp, wy) in zip(got, want):
+        good = p == wp and y == wy
+        ok &= good
+        nm = ACHIEVEMENTS[y] if y < N_ACH else 'none_soon'
+        wnm = ACHIEVEMENTS[wy] if wy < N_ACH else 'none_soon'
+        print(f'{p:>5} {nm:>22} {wnm:>22} {"ok" if good else "WRONG"}')
+    ok &= len(got) == len(want)
+
+    # Episode boundaries: flush must empty everything, so the next episode's
+    # unlocks can never label this episode's states.
+    empty = not lab._pending and not lab._future
+    print(f'\nflush empties the window   {empty}   want True')
+    ok &= empty
+
+    # -- half two: the head trains and the trunk feels it ------------------
+    import argparse
+    import torch.optim as O
+    from stage_02_dqn.train import get_epsilon_schedule, reset_rng
+
+    reset_rng(0)
+    steps, warmup, capacity, batch = 40, 20, 64, 8
+    args = argparse.Namespace(lin_size=16, stride=2, batch_size=batch,
+                              n_step=3, n_quantiles=11, per_alpha=0.5,
+                              total_steps=steps, ez_mu=2.0, ez_max_repeat=100,
+                              reset_every=10_000, lambda_aux=0.5,
+                              aux_horizon=3, aux_none_weight=0.1)
+    net, buffer, extra = build(args, capacity)
+    agent = AuxDrQResets(net, buffer, O.Adam(net.parameters(), lr=1e-4),
+                         get_epsilon_schedule(1.0, 0.05, steps), N_ACTIONS,
+                         gamma=0.99, warmup_steps=warmup, update_steps=2,
+                         update_target_steps=10, **extra)
+
+    rng = np.random.RandomState(0)
+    counts = np.zeros(N_ACH, dtype=np.int32)
+    trunk0 = net.trunk[1].weight.detach().clone()
+    for t in range(steps):
+        if t % 7 == 0:                       # something unlocks now and then
+            counts = counts.copy(); counts[t % N_ACH] += 1
+        s = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+        s_ = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+        agent.learn(s, t % N_ACTIONS, float(t % 2), s_, 1.0, counts=counts)
+
+    shape_ok = net.aux_logits(
+        torch.randint(0, 256, (batch, 3, 64, 64), dtype=torch.uint8,
+                      device=DEVICE)).shape == (batch, N_AUX_CLASSES)
+    trained = not np.isnan(agent.aux_loss)
+    trunk_moved = not torch.equal(trunk0, net.trunk[1].weight.detach())
+    labels_vary = len({row[6] for row in buffer._buffer if row is not None}) > 1
+    print(f'\naux_logits shape           {shape_ok}   want True  '
+          f'(B, {N_AUX_CLASSES})')
+    print(f'aux loss computed          {trained}   want True  '
+          f'({agent.aux_loss:.3f})')
+    print(f'gradient reached the trunk {trunk_moved}   want True')
+    print(f'buffer holds varied labels {labels_vary}   want True')
+    ok &= shape_ok and trained and trunk_moved and labels_vary
+
+    # lambda_aux = 0 must be a true control: same code path, no aux gradient.
+    print(f'\ncontrol check: lambda_aux=0 leaves the RL path identical to '
+          f'stage 10 -- run both and compare the first loss line.')
+    print('\nPASS' if ok else '\nFAIL')
+    return 0 if ok else 1
+
+
+def main(argv=None):
+    if '--test-aux' in (argv if argv is not None else sys.argv[1:]):
+        return test_aux()
+    import stage_02_dqn.train as s02
+    original = s02.train
+    s02.train = train_aux               # the loop must pass achievements down
+    try:
+        return stage_02_main(argv, agent_cls=AuxDrQResets, stage_id=STAGE_ID,
+                             extra_args=extra_args, build=build)
+    finally:
+        s02.train = original
+
+
+if __name__ == '__main__':
+    sys.exit(main() or 0)

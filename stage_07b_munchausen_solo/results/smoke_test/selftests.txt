@@ -1,0 +1,15 @@
+inherits from DoubleDQN     True   want True
+agent carries no n-step     True   want True
+agent carries no quantiles  True   want True
+
+mask=0 -> target is the bonus, within [-1.0, 0]  True   want True
+rows sitting on the clip              11/16  want > 0
+
+soft value  3.521   max-Q 3.521   bound 3.606
+soft <= max_a Q + tau*log(17)         True   want True
+soft >= mean_a Q                      True   want True
+
+with Q spread 0.010 (<< tau), soft value sits strictly
+above max_a Q (the entropy term)      True   want True
+
+PASS

@@ -1,0 +1,25 @@
+Setting all rngs to seed=1
+stage stage_09b_ez_greedy_solo  seed 1  steps 2,000  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/claude-1000/-home-alex-crafter-rl/8eefdf8f-d102-49cf-b027-b2550116bc36/scratchpad/sm09b/crafter_reward-stage_09b_ez_greedy_solo/1/stats.jsonl
+[   1][     200], R/ep=  0.10, eps=1.00, loss=     nan, meanQ=    nan,   616 fps
+[   2][     400], R/ep=  1.10, eps=1.00, loss=     nan, meanQ=    nan,   604 fps
+[   3][     600], R/ep=  1.10, eps=1.00, loss=  0.0027, meanQ=  0.043,   124 fps
+[   4][     800], R/ep=  1.10, eps=1.00, loss=  0.0046, meanQ=  0.034,    48 fps
+[   5][    1000], R/ep=  1.10, eps=1.00, loss=  0.0055, meanQ=  0.033,    39 fps
+[   6][    1200], R/ep=  1.27, eps=1.00, loss=  0.0044, meanQ=  0.029,    35 fps
+[   7][    1400], R/ep=  1.10, eps=1.00, loss=  0.0034, meanQ=  0.033,    30 fps
+[   8][    1600], R/ep=  0.98, eps=1.00, loss=  0.0011, meanQ=  0.027,    29 fps
+[   9][    1800], R/ep=  0.88, eps=1.00, loss=  0.0005, meanQ=  0.027,    28 fps
+[  10][    2000], R/ep=  0.80, eps=0.99, loss=  0.0463, meanQ=  0.035,    28 fps
+
+done: 10 episodes in 1.2 min (28 fps)
+score over 10 episodes: 1.15%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up               70.0%
+  collect_drink         40.0%
+  collect_sapling       30.0%
+  place_plant           20.0%
+  defeat_skeleton       10.0%
+ez-greedy: 413 exploratory draws, 167 committed, mean drawn duration 3.70, longest 100 (cap 100), 1,087 steps (54.4% of the run) inside a commitment

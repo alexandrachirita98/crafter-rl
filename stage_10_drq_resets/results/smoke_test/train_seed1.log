@@ -1,0 +1,14 @@
+Setting all rngs to seed=1
+stage stage_10_drq_resets  seed 1  steps 2,000  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/claude-1000/-home-alex-crafter-rl/8eefdf8f-d102-49cf-b027-b2550116bc36/scratchpad/sm10/crafter_reward-stage_10_drq_resets/1/stats.jsonl
+[reset] head re-initialised at step 1000
+[reset] head re-initialised at step 2000
+
+done: 11 episodes in 2.0 min (16 fps)
+score over 11 episodes: 0.72%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up               72.7%
+  collect_sapling       54.5%
+  place_plant           36.4%

@@ -1,0 +1,15 @@
+agent carries no n-step        True   want True
+agent carries no quantiles     True   want True
+Setting all rngs to seed=0
+
+at eps=1.0 over 20,000 steps:
+  draws 5,252, of which committed (>1 step) 2,019
+  mean drawn duration 3.81   (capped zipf(2.0) mean is ~3.7)
+  steps inside a commitment 14,748 (73.7%)
+  longest single draw 100 (cap 100)
+  commitments fired     True   want True
+  cap never exceeded    True   want True
+
+end_episode clears the walk    True   want True
+
+PASS

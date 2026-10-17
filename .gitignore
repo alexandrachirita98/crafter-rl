@@ -8,6 +8,7 @@ __pycache__/
 
 # Local-only notes, papers and assignment material
 /docs/
+archive/
 
 # Training artifacts and recorded episodes
 /logdir/

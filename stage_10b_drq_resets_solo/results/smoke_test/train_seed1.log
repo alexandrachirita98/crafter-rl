@@ -1,0 +1,26 @@
+Setting all rngs to seed=1
+stage stage_10b_drq_resets_solo  seed 1  steps 2,000  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/claude-1000/-home-alex-crafter-rl/8eefdf8f-d102-49cf-b027-b2550116bc36/scratchpad/sm10b/crafter_reward-stage_10b_drq_resets_solo/1/stats.jsonl
+[   0][     200], R/ep=   nan, eps=1.00, loss=     nan, meanQ=    nan,   735 fps
+[   2][     400], R/ep=  1.10, eps=1.00, loss=     nan, meanQ=    nan,   605 fps
+[   3][     600], R/ep=  1.77, eps=1.00, loss=  0.0135, meanQ=  0.084,   118 fps
+step      800  RESET: re-initialised 2 head layer(s), buffer kept (800 frames)
+[   4][     800], R/ep=  1.85, eps=1.00, loss=  0.0034, meanQ=  0.041,    58 fps
+[   5][    1000], R/ep=  1.90, eps=1.00, loss=  0.0013, meanQ=  0.036,    45 fps
+[   6][    1200], R/ep=  1.93, eps=1.00, loss=  0.0312, meanQ=  0.051,    35 fps
+[   8][    1400], R/ep=  1.85, eps=1.00, loss=  0.0025, meanQ=  0.052,    32 fps
+step    1,600  RESET: re-initialised 2 head layer(s), buffer kept (1,600 frames)
+[   9][    1600], R/ep=  1.66, eps=1.00, loss=  0.0331, meanQ=  0.038,    31 fps
+[  10][    1800], R/ep=  1.50, eps=1.00, loss=  0.0051, meanQ=  0.021,    30 fps
+[  11][    2000], R/ep=  1.60, eps=0.99, loss=  0.0603, meanQ=  0.037,    27 fps
+
+done: 11 episodes in 1.2 min (27 fps)
+score over 11 episodes: 1.29%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up              100.0%
+  collect_sapling       63.6%
+  place_plant           45.5%
+  collect_wood          27.3%
+  collect_drink          9.1%

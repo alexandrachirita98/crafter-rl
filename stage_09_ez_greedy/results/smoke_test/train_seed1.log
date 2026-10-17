@@ -1,0 +1,13 @@
+Setting all rngs to seed=1
+stage stage_09_ez_greedy  seed 1  steps 2,000  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/claude-1000/-home-alex-crafter-rl/8eefdf8f-d102-49cf-b027-b2550116bc36/scratchpad/sm09/crafter_reward-stage_09_ez_greedy/1/stats.jsonl
+
+done: 12 episodes in 1.9 min (18 fps)
+score over 12 episodes: 0.94%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up               66.7%
+  collect_sapling       41.7%
+  place_plant           41.7%
+  collect_wood          16.7%

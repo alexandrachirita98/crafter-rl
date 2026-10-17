@@ -1,0 +1,10 @@
+agent carries no n-step     True   want True
+agent carries no quantiles  True   want True
+Setting all rngs to seed=0
+
+transitions stored          40/40  ok  (one-step holds nothing back)
+written leaves > 0          True   want True   (range 0.06-1.21)
+unwritten leaves == 0       True   want True   (24 padding leaves)
+beta moved off 0.4          0.97  want > 0.4
+
+PASS
