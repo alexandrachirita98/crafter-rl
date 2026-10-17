@@ -9,10 +9,10 @@ a twitch in place that never travels anywhere new. Instead, when exploring,
 commit to one action for a random number of steps drawn from a heavy-tailed
 zeta distribution -- capped, see the comment in step().
 
-contribution.md section 4.2 frames this as the budget version of EDE's
-exploration: EDE runs a 5-head ensemble and Thompson-samples the epistemic
-uncertainty at 5x the output-layer cost. Committed random walks chase the same
-goal for roughly nothing. Say it that way in the deck.
+This is the budget version of EDE's exploration: EDE runs a 5-head ensemble
+and Thompson-samples the epistemic uncertainty at 5x the output-layer cost.
+Committed random walks chase the same goal for roughly nothing. Say it that
+way in the deck.
 
 step() only, plus two lines in end_episode().
 

@@ -10,7 +10,7 @@ Crafter uses the OLD Gym 4-tuple API, verified at crafter/env.py:118:
 NOT the Gymnasium 5-tuple (obs, reward, terminated, truncated, info). We keep
 the 4-tuple deliberately: `done` conflates death with hitting the step cap, and
 the only thing that separates them is info['discount']. See THE EPISODE-END TRAP
-below, and docs/implementation-guide.md section 1.
+below.
 """
 
 import crafter

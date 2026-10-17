@@ -137,7 +137,7 @@ class ReplayBuffer:
 class NStepReplayBuffer(ReplayBuffer):
     """ReplayBuffer, but each slot holds an n-step return instead of one reward.
 
-    Stage 04 onwards. See docs/implementation-guide.md section 4, stage 04.
+    Stage 04 onwards.
 
     WHAT CHANGES AND WHY. The one-step buffer stores r_t and the learner
     bootstraps from s_{t+1}. Here the caller accumulates the next n real
@@ -408,10 +408,10 @@ class PrioritizedReplayBuffer(ReplayBuffer):
        weight is per-sample, so the loss must be computed with
        reduction='none' and then weighted and meaned by hand.
 
-    EXPECT NOTHING FROM THIS STAGE. docs/contribution.md section 4.2: EDE,
-    the only DQN-family agent that does well on Crafter, DELETED prioritised
-    replay and got 2.7x better. We build it because Contribution 3 (stage 12)
-    needs the machinery -- demo transitions get a permanent priority bonus,
+    EXPECT NOTHING FROM THIS STAGE. EDE, the only DQN-family agent that does
+    well on Crafter, DELETED prioritised replay and got 2.7x better. We build
+    it because Contribution 3 (stage 12) needs the machinery -- demo
+    transitions get a permanent priority bonus,
     Hester et al. 2018 section 3 -- and a null result here is the EXPECTED
     outcome, not a bug to hunt.
     """

@@ -27,8 +27,8 @@ All four DQfD mechanisms, because three of them is not the method:
      Q drifts upward together and the RANKING never changes. Hester section
      4.3 found removing it the single most damaging ablation.
 
-Differences from docs/implementation-guide.md section 6, forced by the code
-stages 08-11 actually built:
+Differences from the original sketch, forced by the code stages 08-11
+actually built:
 
   - The guide's loader calls buffer.add(obs=..., is_demo=True) and
     buffer.protect_prefix(). Neither exists. Our buffer is stage 08's ring of

@@ -6,9 +6,9 @@ sum-tree.
 Sample with probability proportional to (loss + eps) ** alpha and correct the
 bias with importance weights, beta annealed 0.4 -> 1.0 over the run.
 
-EXPECT NOTHING FROM THIS, AND THAT IS FINE. contribution.md section 4.2 is
-explicit: EDE deleted prioritised replay and got 2.7x better. We build it for
-one reason -- contribution 3 needs the machinery, because demo transitions get
+EXPECT NOTHING FROM THIS, AND THAT IS FINE. EDE deleted prioritised replay and
+got 2.7x better. We build it for one reason -- contribution 3 needs the
+machinery, because demo transitions get
 a permanent priority bonus. A null result here is the expected outcome, not a
 bug to hunt. If 200k x 2 seeds shows nothing, stage 09 inherits from
 MunchausenQRDQN and uses stage 06's build, the sum-tree stays on disk for

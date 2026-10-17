@@ -19,8 +19,8 @@ come from looking FORWARD in the replay buffer. PPO throws its experience away
 after a few epochs. The buffer is a DQN thing and it is what makes the simple
 version possible.
 
-Three differences from the sketch in docs/implementation-guide.md section 5,
-all forced by what stages 04-10 actually built:
+Three differences from the original sketch, all forced by what stages 04-10
+actually built:
 
   1. The guide indexes labels out of the buffer after the fact. Our buffer is a
      ring of opaque tuples with no stable index into the future, so the label
@@ -40,8 +40,8 @@ Run:
 """
 
 import pathlib
-import random
 import sys
+import time
 from collections import deque
 
 import numpy as np
@@ -51,7 +51,9 @@ import torch.nn.functional as F
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
+from common.env import bootstrap_mask
 from common.metrics import ACHIEVEMENTS
+from common.replay import beta_by_step
 from stage_02_dqn.train import DEVICE, N_ACTIONS, _to_tensor, main as stage_02_main
 from stage_06_qrdqn.train import QRDuelingNet
 from stage_08_per.train import PrioritizedReplayMemory
@@ -185,16 +187,27 @@ class AuxDrQResets(DrQResets):
     """Stage 10, plus the auxiliary loss on the shared trunk."""
 
     def __init__(self, *args, lambda_aux=0.1, aux_horizon=100,
-                 aux_none_weight=0.1, **kwargs):
+                 aux_none_weight=0.1, aux_wake_weight=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._lambda_aux = lambda_aux
         self._labeller = AchievementLabeller(horizon=aux_horizon)
-        # Class imbalance: most steps really are "none soon", so without this
-        # the head learns to always answer 22 and the trunk learns nothing.
-        # We down-weight the majority class rather than subsample it -- the
-        # design choice the slide has to name.
+        # Class imbalance, down-weighted rather than subsampled. Which class
+        # dominates depends on the horizon, measured over 4k random steps:
+        #
+        #   horizon   none_soon   wake_up
+        #        10       79.5%     12.2%
+        #        25       52.2%     27.3%
+        #        50       29.8%     53.0%
+        #       100       22.7%     53.1%
+        #
+        # So at the default horizon 100 the majority is NOT "none soon" --
+        # it is wake_up, which the player repeats ~2x per episode, making it
+        # the next rise for most steps of the approach. Down-weighting only
+        # class 22 there amplifies wake_up instead of damping it.
         weight = torch.ones(N_AUX_CLASSES, device=DEVICE)
         weight[NONE_SOON] = aux_none_weight
+        if aux_wake_weight is not None:
+            weight[ACHIEVEMENTS.index('wake_up')] = aux_wake_weight
         self._aux_weight = weight
         self._pending_counts = None     # set by learn() each step
         # logged alongside loss/meanQ
@@ -246,7 +259,6 @@ class AuxDrQResets(DrQResets):
 
     def _update(self, states, actions, rewards, states_, mask, n, labels,
                 idx, weights):
-        from common.replay import beta_by_step
         self._buffer.beta = beta_by_step(self._step_cnt, self._total_steps)
 
         pred, per_sample = self._per_sample(states, actions, rewards,
@@ -268,8 +280,13 @@ class AuxDrQResets(DrQResets):
         self.aux_loss = aux_loss.item()
         with torch.no_grad():
             self.aux_acc = (logits.argmax(1) == labels).float().mean().item()
-            # The honest baseline is not 1/23, it is "always say none soon".
-            self.aux_major = (labels == NONE_SOON).float().mean().item()
+            # The honest baseline is not 1/23, it is "always answer whichever
+            # class is commonest in this batch" -- which is wake_up, not
+            # none_soon, at the default horizon. Taking class 22's share here
+            # would understate the bar the head has to clear.
+            self.aux_major = (
+                labels.bincount(minlength=N_AUX_CLASSES).max().item()
+                / labels.numel())
 
 
 # ----------------------------------------------------------- 5. the loop
@@ -277,7 +294,6 @@ class AuxDrQResets(DrQResets):
 
 def train_aux(agent, env, step_num=100_000, log_every=10_000):
     """Stage 02's loop, passing info['achievements'] down to the labeller."""
-    import time
     N = 0
     ep_rewards = [0.0]
     state, done = env.reset(), False
@@ -286,7 +302,6 @@ def train_aux(agent, env, step_num=100_000, log_every=10_000):
     for step in range(step_num):
         action = agent.step(state)
         state_, reward, done, info = env.step(action)
-        from common.env import bootstrap_mask
         agent.learn(state, action, reward, state_, bootstrap_mask(done, info),
                     counts=counts_vector(info))
         state = state_
@@ -319,6 +334,9 @@ def extra_args(p):
                    help='steps to look ahead for the next unlock')
     p.add_argument('--aux-none-weight', type=float, default=0.1,
                    help='cross-entropy weight on class 22 ("none soon")')
+    p.add_argument('--aux-wake-weight', type=float, default=None,
+                   help='cross-entropy weight on wake_up; it is the real '
+                        'majority class at horizon >= 50. Default: unweighted')
     p.add_argument('--test-aux', action='store_true',
                    help='check the labeller and one aux gradient, then exit')
 
@@ -332,7 +350,8 @@ def build(args, capacity):
                                         alpha=args.per_alpha)
     return net, buffer, dict(extra, lambda_aux=args.lambda_aux,
                              aux_horizon=args.aux_horizon,
-                             aux_none_weight=args.aux_none_weight)
+                             aux_none_weight=args.aux_none_weight,
+                             aux_wake_weight=args.aux_wake_weight)
 
 
 # ------------------------------------------------------------- self-test
@@ -399,7 +418,8 @@ def test_aux(horizon=3):
                               n_step=3, n_quantiles=11, per_alpha=0.5,
                               total_steps=steps, ez_mu=2.0, ez_max_repeat=100,
                               reset_every=10_000, lambda_aux=0.5,
-                              aux_horizon=3, aux_none_weight=0.1)
+                              aux_horizon=3, aux_none_weight=0.1,
+                              aux_wake_weight=None)
     net, buffer, extra = build(args, capacity)
     agent = AuxDrQResets(net, buffer, O.Adam(net.parameters(), lr=1e-4),
                          get_epsilon_schedule(1.0, 0.05, steps), N_ACTIONS,

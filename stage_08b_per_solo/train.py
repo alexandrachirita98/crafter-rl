@@ -10,9 +10,9 @@ holding stage 02's five-tuples instead of stage 04's six, and _update is
 stage 03's loss made per-sample so it can be both weighted and used as a
 priority.
 
-Expect nothing from this, same as the cumulative stage: contribution.md
-section 4.2 notes EDE deleted prioritised replay and got 2.7x better. The
-isolated row exists so a null result can be attributed to PER itself rather
+Expect nothing from this, same as the cumulative stage: EDE deleted
+prioritised replay and got 2.7x better. The isolated row exists so a null
+result can be attributed to PER itself rather
 than to PER-on-top-of-five-other-things.
 
 Run:

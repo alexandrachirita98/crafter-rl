@@ -1,8 +1,7 @@
 """Scripted expert that records Crafter demonstrations headlessly.
 
 Replaces a human sitting at crafter/run_gui.py. Writes the SAME .npz files
-via crafter.Recorder, so the demo loader in docs/implementation-guide.md
-(section 5) reads these with no changes.
+via crafter.Recorder, so the stage 12 demo loader reads these with no changes.
 
 Needs no display and no pygame. Run it anywhere:
 
@@ -35,6 +34,11 @@ WALKABLE = {MAT['grass'], MAT['path'], MAT['sand']}
 # Stone held back purely for building a shelter to sleep in. Sleeping is the
 # only way to restore energy, and sleeping unsheltered costs 7 health a hit.
 SHELTER_STONE = 4
+# Start building the night shelter at energy 7, not at 5. Energy drains ~1 per
+# 25 steps awake (objects.py:142), so 7 leaves ~50 steps to mine four stone and
+# wall in -- enough, and still late enough not to interrupt the tech tree.
+NIGHT_PREP_ENERGY = 7
+NIGHT_ENERGY = 5
 # VERIFIED, do not change: crafter/objects.py:252 calls world.nearby(pos, 1),
 # so a table counts as "nearby" only within a 3x3 block centred on the player.
 # Guessing a larger radius here makes the expert try to craft while out of
@@ -155,9 +159,22 @@ class ScriptedExpert:
             self.recent.clear()
             self.commit = self._safe_random_move(sem, pos)
             self.commit_left = 6
+        # The commit may not outrank survival. Measured on seeds 3000-3002, a
+        # random walk held the controls for 10-37 low-energy steps and 6-10
+        # steps with an enemy adjacent -- the expert walked in circles while
+        # being eaten. Drop the commit the moment either is true.
+        # Only an actual threat cancels the commit. Low energy alone must not:
+        # energy stays low for the whole night, so cancelling on it left the
+        # oscillation guard permanently disabled and the expert paced between
+        # two tiles until dawn (seed 3001, steps 170-203).
+        urgent = (inv['health'] <= 5
+                  or near(sem, pos, {OBJ['zombie'], OBJ['skeleton']}, 2))
         if getattr(self, 'commit_left', 0) > 0:
-            self.commit_left -= 1
-            return self.commit
+            if urgent:
+                self.commit_left = 0
+            else:
+                self.commit_left -= 1
+                return self.commit
 
         # --- survival first: these interrupt the tech tree ------------------
         # Health does not regenerate while any need is starved, and an episode
@@ -221,7 +238,22 @@ class ScriptedExpert:
         # zombie that was 8 tiles away when we lay down can reach us mid-sleep.
         # So an empty radius is not good enough -- we only sleep when sealed in,
         # meaning every walkable neighbour has been blocked with stone.
-        if inv['energy'] <= 5:
+        # Stock the shelter reserve while it is still cheap. Waiting until
+        # energy is already low means mining stone in the dark with zombies
+        # spawning on every grass tile (env.py:144, target rises as daylight
+        # falls). Four stone bought early is a survivable night.
+        # Only stock while we are not already walling in. Mining is what
+        # un-places a wall: without this guard the expert placed a stone,
+        # saw stone < SHELTER_STONE, and mined the same wall straight back
+        # out -- a place/mine loop, measured at seed 3001 steps 164-169.
+        if (inv['stone'] < SHELTER_STONE and inv['energy'] <= NIGHT_PREP_ENERGY
+                and inv['wood_pickaxe'] >= 1
+                and self._open_neighbours(sem, pos) >= 3):
+            act = self._goto_and_do(sem, pos, {MAT['stone']})
+            if act is not None:
+                return act
+
+        if inv['energy'] <= NIGHT_ENERGY:
             if self._is_sheltered(sem, pos):
                 return A['sleep']
             # Seal ourselves in with stone, one wall per step. Four stone buys
@@ -294,12 +326,16 @@ class ScriptedExpert:
                               needs={'wood': 1, 'stone': 1})
 
         # 7. now spend a stone on place_stone, and stock up for the furnace.
-        if not ach['place_stone'] and inv['stone'] >= 1:
+        # Both spends go through _spare_stone: the shelter reserve is the one
+        # resource with no substitute, because without it the expert cannot
+        # sleep and the first night ends the episode. Spending down to zero
+        # here was the bug that capped every demo at stone tier.
+        if not ach['place_stone'] and self._spare_stone(inv) >= 1:
             act = self._goto_and_place(sem, pos, WALKABLE, A['place_stone'])
             if act is not None:
                 return act
         if not ach['place_furnace']:
-            if inv['stone'] >= 4:
+            if self._spare_stone(inv) >= 1:
                 act = self._goto_and_place(sem, pos, WALKABLE, A['place_furnace'])
                 if act is not None:
                     return act
@@ -350,6 +386,17 @@ class ScriptedExpert:
         if not options:
             return A['noop']
         return int(self.rng.choice(options))
+
+    def _spare_stone(self, inv):
+        """Stone available for achievements, after the shelter reserve.
+
+        The reserve is only held once we can actually use it -- before the
+        wood pickaxe there is no mining, and holding back stone we do not have
+        would just stall the chain.
+        """
+        if inv['wood_pickaxe'] < 1:
+            return inv['stone']
+        return max(0, inv['stone'] - SHELTER_STONE)
 
     def _open_neighbours(self, sem, pos):
         n = 0
@@ -616,8 +663,8 @@ def record(args):
     world is procedurally generated, so some seeds put stone and water within
     20 tiles and others put the player on a sand spit. Rather than tune the
     planner until the median seed is excellent, we screen cheaply and keep the
-    tail. contribution.md section 5 only ever asked for "10-20 episodes that
-    reach the stone pickaxe", not for a uniformly strong player.
+    tail. The contribution only ever asked for "10-20 episodes that reach the
+    stone pickaxe", not for a uniformly strong player.
     """
     outdir = pathlib.Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)

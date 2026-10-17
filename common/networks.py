@@ -2,8 +2,8 @@
 
 Shared because every stage uses the SAME trunk: if the convolutional encoder
 differed between stages, the ablation table would be measuring two things at
-once. The rule from docs/implementation-guide.md section 0.2: if changing it
-would change an earlier stage's result, it does not belong in common/.
+once. The rule: if changing something would change an earlier stage's result,
+it does not belong in common/.
 
 So the trunk lives here. The loss does not -- changing the loss is the entire
 point of stage 06.
@@ -162,15 +162,15 @@ class QRDuelingQNetwork(nn.Module):
     WHY THAT HELPS SO MUCH ON A SMALL BUDGET. One transition used to supply one
     regression target. It now supplies N of them, each pinned to a different
     part of the distribution, so the trunk gets N times the gradient signal
-    from the same 1M environment steps. contribution.md section 2.1 notes that
-    EDE -- the only DQN-family agent that does well on Crafter, at 11.7% --
-    makes exactly this swap as its FIRST change to Rainbow.
+    from the same 1M environment steps. EDE -- the only DQN-family agent that
+    does well on Crafter, at 11.7% -- makes exactly this swap as its FIRST
+    change to Rainbow.
 
     WHY QUANTILES AND NOT C51. C51 fixes a support [V_min, V_max] up front and
     projects onto it; on Crafter nobody knows the right range, and a bad guess
     silently clips the distribution. QR-DQN learns the LOCATIONS and fixes the
     PROBABILITIES instead, so there is no range to guess and no projection
-    step. That is why contribution.md section 5 rejects C51.
+    step. That is why we reject C51.
 
     THE SHAPE, WHICH IS THE WHOLE INTERFACE: (batch, n_actions, n_quantiles).
     Every stage-06 bug is a shape or an axis. Act on
@@ -223,7 +223,7 @@ def quantile_midpoints(n_quantiles, device=None):
     MIDPOINTS, NOT EDGES. Using i/N makes tau_0 = 0, whose loss weight
     |tau - 1{u<0}| is zero for every over-estimate, so the first quantile head
     receives no gradient in that direction and drifts. This is failure mode 1
-    of three in docs/implementation-guide.md stage 06.
+    of three in stage 06.
     """
     i = torch.arange(n_quantiles, device=device, dtype=torch.float32)
     return (2.0 * i + 1.0) / (2.0 * n_quantiles)

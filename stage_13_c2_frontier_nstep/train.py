@@ -16,7 +16,7 @@ rewards, because reward has to travel a long way back; short n (3) once it is
 deep in the tech tree, because by then the targets are dense and a long n is
 mostly variance.
 
-Differences from docs/implementation-guide.md section 7:
+Differences from the original sketch:
 
   - The guide writes `args.n_step = tracker.end_of_episode(...)`. Nothing reads
     args after startup. The live value is the agent's `_n_step`, used by
