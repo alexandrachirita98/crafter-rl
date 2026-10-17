@@ -1,0 +1,5 @@
+Setting all rngs to seed=1
+stage stage_03_double  seed 1  steps 200,000  device cuda
+buffer 100,000 transitions = 2.5 GB host RAM
+logging to /tmp/crafter-277766/crafter_reward-stage_03_double/1/stats.jsonl
+[  62][   10000], R/ep=  1.50, eps=1.00, loss=     nan, meanQ=    nan,   118 fps

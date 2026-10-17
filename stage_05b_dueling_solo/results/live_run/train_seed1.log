@@ -5,3 +5,9 @@ logging to /tmp/crafter-277591/crafter_reward-stage_05b_dueling_solo/1/stats.jso
 [  61][   10000], R/ep=  1.40, eps=1.00, loss=     nan, meanQ=    nan,   119 fps
 [ 123][   20000], R/ep=  1.50, eps=1.00, loss=     nan, meanQ=    nan,   118 fps
 [ 175][   30000], R/ep=  1.20, eps=0.96, loss=  0.0040, meanQ=  0.591,   103 fps
+[ 239][   40000], R/ep=  1.20, eps=0.92, loss=  0.0503, meanQ=  1.083,    94 fps
+[ 297][   50000], R/ep=  2.40, eps=0.89, loss=  0.0151, meanQ=  1.417,    91 fps
+[ 354][   60000], R/ep=  2.20, eps=0.85, loss=  0.0911, meanQ=  1.856,    89 fps
+[ 409][   70000], R/ep=  2.50, eps=0.81, loss=  0.0645, meanQ=  2.853,    87 fps
+[ 462][   80000], R/ep=  3.20, eps=0.77, loss=  0.0665, meanQ=  3.474,    87 fps
+[ 514][   90000], R/ep=  1.80, eps=0.73, loss=  0.2082, meanQ=  4.424,    86 fps
