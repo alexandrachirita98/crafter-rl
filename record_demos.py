@@ -33,12 +33,23 @@ OBJ = {'player': 13, 'cow': 14, 'zombie': 15, 'skeleton': 16, 'arrow': 17,
 WALKABLE = {MAT['grass'], MAT['path'], MAT['sand']}
 # Stone held back purely for building a shelter to sleep in. Sleeping is the
 # only way to restore energy, and sleeping unsheltered costs 7 health a hit.
-SHELTER_STONE = 4
+# One stone is what a shelter actually costs. The old value of 4 assumed a
+# four-walled box, which Crafter cannot build around you (no turn action --
+# see _seal_in). Reserving 4 starved place_stone and place_furnace: 20/20 ->
+# 10/20 on place_stone over seeds 3000-3019. A 2-stone reserve is one wall
+# plus one spare for a second night.
+SHELTER_STONE = 2
 # Start building the night shelter at energy 7, not at 5. Energy drains ~1 per
-# 25 steps awake (objects.py:142), so 7 leaves ~50 steps to mine four stone and
-# wall in -- enough, and still late enough not to interrupt the tech tree.
+# 25 steps awake (objects.py:142), so 7 leaves ~50 steps to find a stone face
+# and dig in -- enough, and still late enough not to interrupt the tech tree.
 NIGHT_PREP_ENERGY = 7
 NIGHT_ENERGY = 5
+# How far to look for a cheap shelter spot, and how many steps to spend walking
+# to it before giving up and walling in where we stand. A commit with no
+# deadline is a wander: seed 3001 locked onto an unreachable tile and paced for
+# 40+ steps while taking hits.
+SHELTER_RADIUS = 3
+SHELTER_WALK = 8
 # VERIFIED, do not change: crafter/objects.py:252 calls world.nearby(pos, 1),
 # so a table counts as "nearby" only within a 3x3 block centred on the player.
 # Guessing a larger radius here makes the expert try to craft while out of
@@ -132,6 +143,9 @@ class ScriptedExpert:
         self.stuck = 0
         self.last_pos = None
         self.recent = collections.deque(maxlen=8)   # for oscillation detection
+        self.shelter_target = None
+        self.shelter_walk = 0
+        self.placed_stone = set()       # tiles we walled -- never mine these back
 
     def act(self, info):
         sem = info['semantic']
@@ -216,52 +230,106 @@ class ScriptedExpert:
         if adjacent and not armed:
             return self._flee(sem, pos, {OBJ['zombie'], OBJ['skeleton']})
 
-        # Thresholds are deliberately high. Health only regenerates when food,
-        # drink and energy are ALL above zero (objects.py:153-164), so letting
-        # any of them run low both stops healing and starts draining. Topping
-        # up at 6 costs a short detour; running dry costs the episode.
-        if inv['drink'] <= 6:
-            act = self._goto_and_do(sem, pos, {MAT['water']})
-            if act is not None:
-                return act
-        if inv['food'] <= 6:
-            act = self._goto_and_do(sem, pos, {OBJ['cow']})
-            if act is not None:
-                return act
-        # Sleep restores energy AND lets health regenerate, and wake_up is an
-        # achievement. But sleeping next to a zombie takes 7 damage per hit
-        # instead of 2, which is most of a full health bar. So: only sleep with
-        # nothing hunting us within its own chase radius of 8, and wall in
-        # first when something is out there.
-        # Sleeping is NOT a single action: it persists for dozens of steps
-        # while energy refills at +1 per ~10 ticks (objects.py:142-148), and a
-        # zombie that was 8 tiles away when we lay down can reach us mid-sleep.
-        # So an empty radius is not good enough -- we only sleep when sealed in,
-        # meaning every walkable neighbour has been blocked with stone.
-        # Stock the shelter reserve while it is still cheap. Waiting until
-        # energy is already low means mining stone in the dark with zombies
-        # spawning on every grass tile (env.py:144, target rises as daylight
-        # falls). Four stone bought early is a survivable night.
-        # Only stock while we are not already walling in. Mining is what
-        # un-places a wall: without this guard the expert placed a stone,
-        # saw stone < SHELTER_STONE, and mined the same wall straight back
-        # out -- a place/mine loop, measured at seed 3001 steps 164-169.
+        # Needs vs shelter: which one is actually urgent.
+        #
+        # Health regenerates only while food, drink AND energy are all above
+        # zero (objects.py:153-164), so all three matter. But they are not
+        # equally urgent at the same number. Food and drink drain ~1 per 25
+        # steps and a top-up is a short detour at any hour; energy can only be
+        # restored by sleeping, and sleeping needs a sealed box built BEFORE
+        # the energy runs out.
+        #
+        # The original order put the <= 6 top-ups ahead of the night branch
+        # unconditionally. Measured over seeds 3000-3005 that spent 328 of 832
+        # night steps chasing cows and water instead of walling in, the expert
+        # never slept once in 20 seeds, energy hit 0, health stopped
+        # regenerating and the first night killed it. So: comfort top-ups yield
+        # to shelter once energy is critical and we hold the stone to build it.
+        building_shelter = (inv['energy'] <= NIGHT_ENERGY
+                            and inv['stone'] >= 1
+                            and not self._is_sheltered(sem, pos))
+        starving = inv['food'] <= 2 or inv['drink'] <= 2
+
+        if not building_shelter or starving:
+            if inv['drink'] <= 6:
+                act = self._goto_and_do(sem, pos, {MAT['water']})
+                if act is not None:
+                    return act
+            if inv['food'] <= 6:
+                act = self._goto_and_do(sem, pos, {OBJ['cow']})
+                if act is not None:
+                    return act
+
+        # Cheap tools, even at night, but ONLY when it costs a single action:
+        # materials in hand and a table already in range. _make would otherwise
+        # wander off for wood or walk to a distant table, which is what we
+        # cannot afford at night. Sheltering straight through with the materials
+        # already in the bag cost make_stone_pickaxe 13/30 -> 3/20.
+        if (inv['wood'] >= 1 and inv['stone'] >= 1
+                and near(sem, pos, {MAT['table']}, TABLE_RADIUS)):
+            if not ach['make_stone_pickaxe']:
+                return A['make_stone_pickaxe']
+            if not ach['make_stone_sword']:
+                return A['make_stone_sword']
+
+        # Stock the shelter reserve while it is still cheap -- before dusk, not
+        # after. Mining in the dark means mining while zombies spawn on every
+        # grass tile (env.py:144: the target count rises as daylight falls).
+        # The _open_neighbours guard stops this rule from re-mining the wall
+        # _seal_in just placed: without it the expert placed a stone, saw
+        # stone < SHELTER_STONE, and mined the same wall back out -- a
+        # place/mine loop measured at seed 3001, steps 164-169.
         if (inv['stone'] < SHELTER_STONE and inv['energy'] <= NIGHT_PREP_ENERGY
-                and inv['wood_pickaxe'] >= 1
-                and self._open_neighbours(sem, pos) >= 3):
-            act = self._goto_and_do(sem, pos, {MAT['stone']})
+                and inv['wood_pickaxe'] >= 1):
+            act = self._goto_and_do(sem, pos, {MAT['stone']},
+                                    avoid=self.placed_stone)
             if act is not None:
                 return act
 
+        # Sleep restores energy AND lets health regenerate, and wake_up is an
+        # achievement. But a zombie hits a sleeping player for 7 instead of 2
+        # (objects.py:307-310), and sleeping is not one action -- it persists
+        # for dozens of steps while energy refills (objects.py:142-148). So an
+        # empty radius is not enough: we sleep only when sealed in, meaning
+        # every walkable neighbour is blocked.
         if inv['energy'] <= NIGHT_ENERGY:
             if self._is_sheltered(sem, pos):
                 return A['sleep']
-            # Seal ourselves in with stone, one wall per step. Four stone buys
-            # a full safe night, which is why SHELTER_STONE is reserved above.
-            if inv['stone'] >= 1:
-                act = self._seal_in(sem, pos)
-                if act is not None:
-                    return act
+            # Crafter has NO turn-in-place action (constants.actions: the only
+            # direction actions are move_*), and move_* toward a walkable tile
+            # MOVES you (objects.py:174-177). So you can only ever wall the one
+            # tile you already face, and changing facing means stepping.
+            #
+            # That makes a 4-walled box physically unbuildable. The only
+            # shelter the game allows is a DEAD-END: stand on a tile with
+            # exactly one open neighbour, face that exit, place one stone.
+            # Every earlier version tried to build a box in open grass, placed
+            # one wall, stepped sideways to face the next gap, and so undid
+            # itself -- which is why the expert never slept once in 20 seeds.
+            # Sleep once we are deep enough that nothing can reach us without
+            # walking a corridor. A fully sealed box cannot be built around
+            # yourself in Crafter (no turn action: _seal_in explains why), so
+            # "one exit, and nothing hunting down the corridor" is the best
+            # shelter the game allows -- and it is enough, because zombies
+            # spawn only on grass (env.py:144) and have to path to us.
+            openings = self._open_neighbours(sem, pos)
+            if openings == 0:
+                return A['sleep']
+            if openings == 1:
+                if inv['stone'] >= 1:
+                    act = self._seal_in(sem, pos)
+                    if act is not None:
+                        return act          # we happened to face the exit
+                if not hunting:
+                    return A['sleep']
+            # Otherwise DIG IN. Mining one tile out of a stone face gives a
+            # pocket with exactly one entrance -- the tile we came from -- and
+            # that is the one shelter always available once we hold a pickaxe.
+            # Natural dead-ends in open grass are too rare to rely on: seeking
+            # them gave 1 sleep in 20 seeds.
+            act = self._dig_in(sem, pos, inv)
+            if act is not None:
+                return act
             if not hunting and self._open_neighbours(sem, pos) <= 1:
                 return A['sleep']        # a natural dead-end is shelter enough
             # Out of stone. Mine some BEFORE fleeing, otherwise we ping-pong
@@ -275,8 +343,15 @@ class ScriptedExpert:
                 return A['sleep']        # out of options; sleeping beats starving
 
         # --- tech tree, in dependency order ---------------------------------
-        # 1. wood
-        if inv['wood'] < 1:
+        # 1. wood. Keep a 2-wood float once the stone chain is live, not just
+        # 1: a table costs 2 wood and can be placed anywhere, and the stone
+        # sword was stalling 565 steps on "no table in range" and 494 on "no
+        # wood" (seeds 3000-3009) because it had to walk back to a table it had
+        # left behind. Carrying the table is cheaper than returning to it.
+        wood_float = 1
+        if ach['make_stone_pickaxe'] and not ach['make_stone_sword']:
+            wood_float = 3               # 1 for the sword + 2 for a table
+        if inv['wood'] < wood_float:
             act = self._goto_and_do(sem, pos, {MAT['tree']})
             if act is not None:
                 return act
@@ -292,15 +367,6 @@ class ScriptedExpert:
             return self._make(sem, pos, inv, 'wood_pickaxe', A['make_wood_pickaxe'])
         if not ach['make_wood_sword']:
             return self._make(sem, pos, inv, 'wood_sword', A['make_wood_sword'])
-        # 4. sapling and plant (cheap, two achievements)
-        if not ach['collect_sapling']:
-            act = self._goto_and_do(sem, pos, {MAT['grass']})
-            if act is not None:
-                return act
-        if not ach['place_plant'] and inv['sapling'] >= 1:
-            act = self._goto_and_place(sem, pos, {MAT['grass']}, A['place_plant'])
-            if act is not None:
-                return act
         # 5. stone. Just get ONE to unlock collect_stone, then move straight
         # on to the tools -- each of which fetches its own materials via
         # _make. An earlier version demanded a large stockpile here
@@ -310,8 +376,16 @@ class ScriptedExpert:
         # never advanced, and make_stone_pickaxe sat at 0 for every seed.
         # Lesson that generalises: a planner must never have one rule saving a
         # resource and another spending it, with no arbiter between them.
-        if inv['stone'] < 1:
-            act = self._goto_and_do(sem, pos, {MAT['stone']})
+        stone_float = 1
+        if ach['make_stone_pickaxe']:
+            # place_stone and place_furnace together need 5 stone on top of the
+            # shelter reserve. Fetching them one at a time left the expert at
+            # zero spare stone for 508 of the 772 steps it spent waiting on
+            # place_stone (seeds 3000-3009), 84% of them at night.
+            stone_float = SHELTER_STONE + 5
+        if inv['stone'] < stone_float:
+            act = self._goto_and_do(sem, pos, {MAT['stone']},
+                                    avoid=self.placed_stone)
             if act is not None:
                 return act
 
@@ -324,6 +398,20 @@ class ScriptedExpert:
         if not ach['make_stone_sword']:
             return self._make(sem, pos, inv, 'stone_sword', A['make_stone_sword'],
                               needs={'wood': 1, 'stone': 1})
+
+        # 4b. sapling and plant. Cheap, but deferred until the stone tools are
+        # done: hunting grass tiles cost ~100 of the 1797 pre-pickaxe steps
+        # measured over seeds 3000-3009, and daylight is the scarce resource
+        # early. place_plant also needs to happen early enough for eat_plant to
+        # ripen, which is why it is here and not at the end.
+        if not ach['collect_sapling']:
+            act = self._goto_and_do(sem, pos, {MAT['grass']})
+            if act is not None:
+                return act
+        if not ach['place_plant'] and inv['sapling'] >= 1:
+            act = self._goto_and_place(sem, pos, {MAT['grass']}, A['place_plant'])
+            if act is not None:
+                return act
 
         # 7. now spend a stone on place_stone, and stock up for the furnace.
         # Both spends go through _spare_stone: the shelter reserve is the one
@@ -413,17 +501,217 @@ class ScriptedExpert:
         return self._open_neighbours(sem, pos) == 0
 
     def _seal_in(self, sem, pos):
-        """Place stone into an open neighbour, facing it first if needed."""
+        """Wall off one open neighbour, turning to face it first.
+
+        In a one-exit pocket the facing tile is usually SOLID (we dug downward,
+        so we face down into rock while the exit is up). Crafter has no turn
+        action, so the only way to face the exit is to step out and come back
+        -- and stepping out of a pocket is exactly what we must not do. Instead
+        we step INTO the exit and immediately back: arriving by moving `up`
+        leaves us facing up, i.e. facing the exit, and the next call can place.
+        Measured at seed 3001 t150: openNb=1, stone=6, and the old code issued
+        move_down into rock forever.
+
+        The turn is the subtle part. `move_*` does NOT just turn: objects.py:174
+        sets facing and then moves, so "face the gap" on a walkable tile walks
+        INTO the gap. The expert then stands on the tile it meant to block,
+        the old tile is now the open one, and it paces between the two until
+        dawn -- measured at seed 3001, steps 170-203.
+
+        Crafter has no turn-in-place action, so we seal in an order that makes
+        the move harmless: always block the tile we are ALREADY facing when it
+        is open. Otherwise step to a neighbour with fewer exits, which is
+        progress rather than oscillation.
+        """
+        facing_tile = (pos[0] + self.facing[0], pos[1] + self.facing[1])
+        if (0 <= facing_tile[0] < sem.shape[0]
+                and 0 <= facing_tile[1] < sem.shape[1]
+                and sem[facing_tile] in WALKABLE):
+            self.placed_stone.add(facing_tile)
+            return A['place_stone']
+
+        # Not facing an exit, and no way to turn without moving. Caller must
+        # arrange to arrive already facing the exit -- see _dig_in, which digs
+        # a two-deep pocket for exactly this reason.
+
+        # Not facing an open tile. Turning costs a step and moves us, so only
+        # do it toward the neighbour that leaves us best off: fewest exits to
+        # seal from there.
+        best, best_move, best_delta = None, None, None
         for delta, move in DIR_TO_ACTION.items():
             nxt = (pos[0] + delta[0], pos[1] + delta[1])
             if not (0 <= nxt[0] < sem.shape[0] and 0 <= nxt[1] < sem.shape[1]):
                 continue
-            if sem[nxt] not in WALKABLE:
+            if sem[nxt] not in WALKABLE or sem[nxt] in LETHAL:
                 continue
-            if self.facing != delta:
-                self.facing = delta
-                return move
-            return A['place_stone']
+            exits = self._open_neighbours(sem, nxt)
+            if best is None or exits < best:
+                best, best_move, best_delta = exits, move, delta
+        if best_move is None:
+            return None
+        self.facing = best_delta
+        return best_move
+
+    def _dig_in(self, sem, pos, inv):
+        """Carve a pocket in a stone face and sleep at the far end.
+
+        Crafter will not let you seal a box around yourself: there is no turn
+        action, `move_*` into an open tile moves you, and so the one tile you
+        can wall is the one you already face. Standing in a pocket you face the
+        rock you just mined, never the mouth.
+
+        What works instead is DEPTH. Zombies spawn only on grass (env.py:144)
+        and have to path to you, so a pocket two tiles into a stone face is
+        reached only by walking the corridor. We dig in, go to the far end, and
+        sleep there -- and because we entered facing inward, the one stone we
+        hold can wall the far side if that is what is open.
+        """
+        if inv['wood_pickaxe'] < 1:
+            return None
+        # Already inside a pocket we dug? Seal the way we came in.
+        if self._open_neighbours(sem, pos) == 1 and inv['stone'] >= 1:
+            return self._seal_in(sem, pos)
+
+        # Prefer a stone tile whose far side is also solid, so the hole we open
+        # really has one entrance rather than becoming a corridor.
+        targets = []
+        for cand in find(sem, {MAT['stone']}):
+            cand = tuple(cand)
+            opens = 0
+            for delta in DIR_TO_ACTION:
+                nb = (cand[0] + delta[0], cand[1] + delta[1])
+                if not (0 <= nb[0] < sem.shape[0] and 0 <= nb[1] < sem.shape[1]):
+                    continue
+                if sem[nb] in WALKABLE:
+                    opens += 1
+            if opens <= 1:
+                targets.append(cand)
+        if not targets:
+            return None
+        move, face = bfs_step(sem, pos, targets)
+        if face is not None:
+            if self.facing != face:
+                self.facing = face
+                return DIR_TO_ACTION[face]
+            return A['do']               # mine it; we step in next tick
+        if move is not None:
+            self.facing = next(d for d, a in DIR_TO_ACTION.items() if a == move)
+            return move
+        return None
+
+    def _goto_deadend(self, sem, pos, inv):
+        """Walk to the nearest tile with exactly one open neighbour.
+
+        One open neighbour is the only sealable shelter in Crafter (see the
+        note in the night branch). A natural dead-end costs zero stone; one we
+        have to wall costs exactly one.
+        """
+        if self._open_neighbours(sem, pos) <= 1:
+            self.shelter_target = None
+            return None
+
+        target = getattr(self, 'shelter_target', None)
+        if target is not None:
+            self.shelter_walk += 1
+            if target == pos or self.shelter_walk > SHELTER_WALK:
+                self.shelter_target = None
+                return None
+            if sem[target] in WALKABLE and self._open_neighbours(sem, target) <= 1:
+                move, _ = bfs_step(sem, pos, [target])
+                if move is not None:
+                    self.facing = next(d for d, a in DIR_TO_ACTION.items()
+                                       if a == move)
+                    return move
+            self.shelter_target = None
+            return None
+
+        cands = []
+        for dx in range(-SHELTER_RADIUS, SHELTER_RADIUS + 1):
+            for dy in range(-SHELTER_RADIUS, SHELTER_RADIUS + 1):
+                cand = (pos[0] + dx, pos[1] + dy)
+                if not (0 <= cand[0] < sem.shape[0] and 0 <= cand[1] < sem.shape[1]):
+                    continue
+                if sem[cand] not in WALKABLE or sem[cand] in LETHAL:
+                    continue
+                if self._open_neighbours(sem, cand) <= 1:
+                    cands.append(cand)
+        if not cands:
+            return None
+        move, _ = bfs_step(sem, pos, cands)
+        if move is None:
+            return None
+        nearest = min(cands, key=lambda c: abs(c[0] - pos[0]) + abs(c[1] - pos[1]))
+        self.shelter_target = nearest
+        self.shelter_walk = 0
+        self.facing = next(d for d, a in DIR_TO_ACTION.items() if a == move)
+        return move
+
+    def _shelter_score(self, sem, pos):
+        """How many stone a spot costs to seal. Lower is better."""
+        return self._open_neighbours(sem, pos)
+
+    def _goto_shelter(self, sem, pos, inv):
+        """Walk to a nearby spot that is cheap to wall in, if one beats here.
+
+        A dead-end costs 1 stone and an open field costs 4, so walking three
+        tiles to a corner is almost always the better trade.
+
+        We COMMIT to the chosen tile and keep it until we arrive or it stops
+        being walkable. Re-picking the best spot every step is what killed the
+        first version: the ranking flipped as the view scrolled, the expert
+        re-targeted each step and walked all night -- measured over seeds
+        3000-3005 as ~1000 move actions against 13 place_stone and 0 sleeps.
+        """
+        here = self._shelter_score(sem, pos)
+        if here <= 1:
+            self.shelter_target = None
+            return None
+        affordable = inv['stone']
+
+        # Still heading somewhere? Keep going -- but on a deadline. A commit
+        # with no give-up path is worse than no commit: measured at seed 3001,
+        # the expert locked onto (23,24), could not route there, and wandered
+        # 40+ steps taking damage while the target never changed. Give it
+        # SHELTER_WALK steps, then wall in wherever we stand.
+        target = getattr(self, 'shelter_target', None)
+        if target is not None:
+            self.shelter_walk += 1
+            arrived = (target == pos)
+            expired = self.shelter_walk > SHELTER_WALK
+            if arrived or expired:
+                self.shelter_target = None
+                return None              # seal in right here
+            if sem[target] in WALKABLE and self._shelter_score(sem, target) < here:
+                move, face = bfs_step(sem, pos, [target])
+                if move is not None:
+                    self.facing = next(d for d, a in DIR_TO_ACTION.items()
+                                       if a == move)
+                    return move
+            self.shelter_target = None      # unreachable or no longer better
+            return None
+
+        best, best_pos = here, None
+        for dx in range(-SHELTER_RADIUS, SHELTER_RADIUS + 1):
+            for dy in range(-SHELTER_RADIUS, SHELTER_RADIUS + 1):
+                cand = (pos[0] + dx, pos[1] + dy)
+                if not (0 <= cand[0] < sem.shape[0] and 0 <= cand[1] < sem.shape[1]):
+                    continue
+                if sem[cand] not in WALKABLE or sem[cand] in LETHAL:
+                    continue
+                score = self._shelter_score(sem, cand)
+                if score > affordable:
+                    continue            # cannot finish this box either
+                if score < best:
+                    best, best_pos = score, cand
+        if best_pos is None:
+            return None
+        self.shelter_target = best_pos
+        self.shelter_walk = 0
+        move, face = bfs_step(sem, pos, [best_pos])
+        if move is not None:
+            self.facing = next(d for d, a in DIR_TO_ACTION.items() if a == move)
+            return move
+        self.shelter_target = None
         return None
 
     def _flee(self, sem, pos, enemy_ids):
@@ -443,8 +731,16 @@ class ScriptedExpert:
                 best, best_action = d, action
         return best_action
 
-    def _goto_and_do(self, sem, pos, ids, only_if_adjacent=False):
+    def _goto_and_do(self, sem, pos, ids, only_if_adjacent=False, avoid=None):
+        """Walk to the nearest matching tile and 'do' it.
+
+        `avoid` excludes tiles we placed ourselves. Without it the stone-seeking
+        rules happily mine the shelter wall they just built, which reads as
+        progress to every guard based on inventory counts.
+        """
         targets = find(sem, ids)
+        if avoid:
+            targets = [t for t in targets if tuple(t) not in avoid]
         if not targets:
             return None
         if only_if_adjacent and not near(sem, pos, ids, 1):
