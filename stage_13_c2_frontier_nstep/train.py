@@ -1,33 +1,33 @@
-"""Stage 13 -- CONTRIBUTION 2: n driven by the tech-tree frontier.
+"""Stage 13 -- n driven by the tech-tree frontier.
 
-Ours, and the one most likely to do nothing -- say that on the slide before
-someone else says it. If the agent never gets past tier 2 the dial never moves
-and this reduces exactly to fixed n = 10. That is why it is built last, after
-stage 12 gives the agent something to climb with.
+Our own idea, and the one most likely to turn out to do nothing: if the agent
+never gets past tier 2 the dial never moves and this reduces to fixed n = 10.
+That is why it is built last, after stage 12 gives the agent something to climb
+with.
 
 BBF (Schwarzer et al. 2023, https://arxiv.org/abs/2305.19452) section 3 anneals
-n from 10 to 3 as the STEP COUNTER ticks up. Our change is the trigger, not the
-schedule: a step counter is a guess at progress, the frontier IS the progress.
-Two seeds that reach the stone pickaxe at 300k and 600k want the dial turned at
-different moments, and a fixed schedule necessarily gets one of them wrong.
+n from 10 to 3 as the step counter ticks up. Our change is the trigger, not the
+schedule: a step counter is a guess at progress, where the frontier is the
+progress. Two seeds that reach the stone pickaxe at 300k and 600k want the dial
+turned at different moments, and a fixed schedule has to get one of them wrong.
 
-The logic, in one line: long n (10) while the agent is still finding its first
+The logic in one line: long n (10) while the agent is still finding its first
 rewards, because reward has to travel a long way back; short n (3) once it is
 deep in the tech tree, because by then the targets are dense and a long n is
 mostly variance.
 
-Differences from the original sketch:
+Differences from the sketch this started as:
 
-  - The guide writes `args.n_step = tracker.end_of_episode(...)`. Nothing reads
-    args after startup. The live value is the agent's `_n_step`, used by
-    stage 04's window, so the tracker sets that.
+  - The sketch sets `args.n_step = tracker.end_of_episode(...)`. Nothing reads
+    args after startup. The live value is the agent's `_n_step`, used by stage
+    04's window, so that is what the tracker sets.
   - Changing n mid-episode would leave the open window holding a mix of
     lengths, so the tracker only ever acts at an episode boundary, after
     end_episode() has flushed.
-  - The tracker needs info['achievements'] at the done step; stage 11's loop
+  - The tracker needs info['achievements'] at the done step. Stage 11's loop
     already carries it, so the loop passes it on rather than re-deriving it.
 
-Three controls to run against, all cheap because they are flags on this file:
+Three controls to compare against, all flags on this file:
     --fixed-n 3      BBF's endpoint
     --fixed-n 10     stage 04's default, the real baseline
     --bbf-schedule   step-based annealing, the published trigger
@@ -35,7 +35,7 @@ Three controls to run against, all cheap because they are flags on this file:
 Run:
     python stage_13_c2_frontier_nstep/train.py --test-frontier
     python stage_13_c2_frontier_nstep/train.py --total-steps 2000 \
-        --warmup-steps 500 --buffer-size 5000
+        --warmup-steps 500 --buffer-size 5000 --log-every 200
     python stage_13_c2_frontier_nstep/train.py --total-steps 200000 --seed 1
 """
 
@@ -58,9 +58,9 @@ from stage_12_c3_demonstrations.train import (DQfD, build as build_12,
 
 STAGE_ID = 'stage_13_c2_frontier_nstep'
 
-# Our reading of crafter/data.yaml. All 22 names checked against
-# common.metrics.ACHIEVEMENTS -- the assert below is not decoration, a typo
-# here would silently put an achievement in no tier at all.
+# Read off crafter/data.yaml and checked against common.metrics.ACHIEVEMENTS.
+# The assert below earns its keep: a typo here would leave an achievement in
+# no tier at all, and nothing else would complain.
 TIERS = {
     1: ['collect_wood', 'collect_drink', 'collect_sapling', 'eat_cow'],
     2: ['place_table', 'make_wood_pickaxe', 'make_wood_sword', 'place_plant'],
@@ -81,8 +81,8 @@ class FrontierTracker:
     """n follows achieved depth, and only ever shrinks.
 
     The window (100 episodes), the threshold (20%) and the monotonicity rule
-    are ours and untuned. They are the obvious things to ablate if this looks
-    marginal -- say so in the deck rather than letting it be found.
+    are ours and untuned. If the stage looks marginal, these three are the
+    first things to ablate.
     """
 
     def __init__(self, window=100, threshold=0.20):
@@ -103,14 +103,14 @@ class FrontierTracker:
             if rate >= self.threshold:       # reached in >= 20% of episodes
                 frontier = tier
         self.frontier = frontier
-        # MONOTONIC: never let n grow back. A lucky streak must not undo the
-        # sharpening, or n oscillates and training never settles.
+        # n never grows back. A lucky streak should not undo the sharpening,
+        # or n oscillates and training never settles.
         self.n = min(self.n, TIER_N[frontier])
         return self.n
 
 
 def bbf_n(step, total_steps, n_start=10, n_end=3, anneal_frac=0.5):
-    """The published control: n annealed on the STEP COUNTER, not progress."""
+    """The published control: n annealed on the step counter, not progress."""
     frac = min(1.0, step / max(1, anneal_frac * total_steps))
     return int(round(n_start + frac * (n_end - n_start)))
 
@@ -129,10 +129,10 @@ class FrontierDQfD(DQfD):
             self._n_step = fixed_n
 
     def on_episode_end(self, achievements):
-        """Called by the loop AFTER end_episode() has flushed the window.
+        """Called by the loop after end_episode() has flushed the window.
 
-        Never mid-episode: stage 04's window would then hold a mix of
-        lengths, and the n stored per sample would stop describing it.
+        Never mid-episode: stage 04's window would then hold a mix of lengths,
+        and the n stored on each sample would stop describing it.
         """
         if self._fixed_n is not None:
             return
@@ -145,9 +145,9 @@ class FrontierDQfD(DQfD):
 def train_frontier(agent, env, step_num=100_000, log_every=10_000):
     """Stage 11's loop, plus the per-episode frontier log.
 
-    frontier.jsonl is the deliverable of this stage even if n never moves --
-    "contribution 2 did nothing because the agent plateaued at tier 2, and
-    here is the curve proving it" is a real result, and it needs the curve.
+    frontier.jsonl is worth keeping even if n never moves: "the dial stayed at
+    10 because the agent plateaued at tier 2" is only a conclusion if there is
+    a curve behind it.
     """
     logdir = pathlib.Path(getattr(env, '_directory', '.'))
     flog = (logdir / 'frontier.jsonl').open('a')
@@ -227,7 +227,7 @@ def test_frontier(window=10, threshold=0.20):
     """Scripted episode streams against hand-computed frontiers."""
     ok = True
 
-    # Before the window fills, nothing may move -- a tracker that acts on
+    # Nothing may move before the window fills. A tracker that acted on
     # 3 episodes would chase noise for the whole run.
     t = FrontierTracker(window=window, threshold=threshold)
     for _ in range(window - 1):
@@ -245,7 +245,7 @@ def test_frontier(window=10, threshold=0.20):
           f'want 3, {TIER_N[3]}   {"ok" if deep else "WRONG"}')
     ok &= deep
 
-    # Below the threshold must NOT count. 1 in 10 is 10% < 20%.
+    # Below the threshold does not count: 1 in 10 is 10%, under the 20%.
     t2 = FrontierTracker(window=window, threshold=threshold)
     for i in range(window):
         names = ['collect_wood', 'place_table']
@@ -265,14 +265,14 @@ def test_frontier(window=10, threshold=0.20):
                                    'collect_stone', 'collect_coal'))
     sharp_n, sharp_f = t3.n, t3.frontier
     for _ in range(window):
-        t3.end_of_episode(_episode('collect_wood'))   # total collapse to tier 1
+        t3.end_of_episode(_episode('collect_wood'))   # collapse back to tier 1
     mono = t3.n == sharp_n and t3.frontier == 1
     print(f'after collapse to tier 1: frontier {t3.frontier}, n {t3.n}   '
           f'want 1, {sharp_n} (n must NOT grow back from {sharp_f})   '
           f'{"ok" if mono else "WRONG"}')
     ok &= mono
 
-    # The BBF control, for the ablation row.
+    # The BBF control, for the ablation table.
     print(f'\nBBF step-based control, 1M budget')
     bbf = [(s, bbf_n(s, 1_000_000)) for s in (0, 250_000, 500_000, 1_000_000)]
     for s, n in bbf:
@@ -281,9 +281,9 @@ def test_frontier(window=10, threshold=0.20):
     print(f'  anneals 10 -> 3   {bbf_ok}   want True')
     ok &= bbf_ok
 
-    # And the honest note the deck needs.
+    # Worth printing because it is the most likely outcome.
     print(f'\nIf the frontier never leaves tier 2, n stays {TIER_N[2]} and '
-          f'this stage IS fixed n.\nThat is a reportable finding, not a bug. '
+          f'this stage is fixed n.\nThat is a result, not a bug -- '
           f'frontier.jsonl is the evidence either way.')
     print('\nPASS' if ok else '\nFAIL')
     return 0 if ok else 1

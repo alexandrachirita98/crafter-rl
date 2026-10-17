@@ -1,31 +1,31 @@
-"""Stage 11 -- CONTRIBUTION 1: an auxiliary head predicting what unlocks next.
+"""Stage 11 -- an auxiliary head predicting what unlocks next.
 
-Ours. The idea is the UNREAL one (Jaderberg et al. 2017,
-https://arxiv.org/abs/1611.05397): reward in Crafter arrives maybe once every
+Our own addition, following the UNREAL idea (Jaderberg et al. 2017,
+https://arxiv.org/abs/1611.05397). Reward in Crafter arrives maybe once every
 few hundred steps, which is a starvation diet for a conv trunk that has to
 learn to see trees, stone and zombies. But the environment hands us the
 achievement state on every single step, free, and nothing is training on it.
 
-So: a second head on the SHARED trunk, 23-way classification of "which
+So: a second head on the shared trunk, 23-way classification of "which
 achievement unlocks within the next `horizon` steps", class 22 meaning "none
 soon". To predict "a stone pickaxe is coming" the trunk must represent "I hold
 wood and I am standing near stone" -- which is exactly the perception the main
 task needs. The action-selection path is untouched; only the gradient reaching
 the trunk changes.
 
-Why this works for us and not for PPO -- the question an examiner will ask,
-since Moon et al. 2023 needed an episodic memory for the same trick: our labels
-come from looking FORWARD in the replay buffer. PPO throws its experience away
-after a few epochs. The buffer is a DQN thing and it is what makes the simple
-version possible.
+Why the cheap version works here: the labels come from looking forward in the
+replay buffer. PPO throws its experience away after a few epochs, which is why
+Moon et al. 2023 needed an episodic memory for the same trick. The buffer is a
+DQN thing and it is what lets us skip that machinery.
 
-Three differences from the original sketch, all forced by what stages 04-10
-actually built:
+Three differences from how the method is usually described, all forced by what
+stages 04-10 actually built:
 
-  1. The guide indexes labels out of the buffer after the fact. Our buffer is a
-     ring of opaque tuples with no stable index into the future, so the label
-     is computed at STORE time instead, from a lookahead window the agent
-     keeps alongside stage 04's n-step window. Same label, no buffer surgery.
+  1. The usual recipe indexes labels out of the buffer after the fact. Our
+     buffer is a ring of opaque tuples with no stable index into the future,
+     so the label is computed at store time instead, from a lookahead window
+     the agent keeps alongside stage 04's n-step window. Same label, no buffer
+     surgery.
   2. The transition tuple grows to seven: (s, a, G, s_n, mask, n, y). Both the
      n-step deque and the prioritised ring carry it.
   3. The head hangs off QRDuelingNet.trunk, not a 512-wide feature vector --
@@ -34,7 +34,7 @@ actually built:
 Run:
     python stage_11_c1_achievement_aux/train.py --test-aux
     python stage_11_c1_achievement_aux/train.py --total-steps 2000 \
-        --warmup-steps 500 --buffer-size 5000
+        --warmup-steps 500 --buffer-size 5000 --log-every 200
     python stage_11_c1_achievement_aux/train.py --total-steps 200000 --seed 1 \
         --lambda-aux 0.1
 """
@@ -200,10 +200,10 @@ class AuxDrQResets(DrQResets):
         #        50       29.8%     53.0%
         #       100       22.7%     53.1%
         #
-        # So at the default horizon 100 the majority is NOT "none soon" --
-        # it is wake_up, which the player repeats ~2x per episode, making it
-        # the next rise for most steps of the approach. Down-weighting only
-        # class 22 there amplifies wake_up instead of damping it.
+        # At the default horizon 100 the majority is not "none soon", it is
+        # wake_up -- the player repeats it about twice an episode, so it ends
+        # up being the next rise for most steps of the approach. Down-weighting
+        # only class 22 there amplifies wake_up instead of damping it.
         weight = torch.ones(N_AUX_CLASSES, device=DEVICE)
         weight[NONE_SOON] = aux_none_weight
         if aux_wake_weight is not None:
@@ -280,10 +280,10 @@ class AuxDrQResets(DrQResets):
         self.aux_loss = aux_loss.item()
         with torch.no_grad():
             self.aux_acc = (logits.argmax(1) == labels).float().mean().item()
-            # The honest baseline is not 1/23, it is "always answer whichever
-            # class is commonest in this batch" -- which is wake_up, not
+            # The baseline to beat is not 1/23, it is "always answer
+            # whichever class is commonest in this batch" -- wake_up, not
             # none_soon, at the default horizon. Taking class 22's share here
-            # would understate the bar the head has to clear.
+            # would understate the bar.
             self.aux_major = (
                 labels.bincount(minlength=N_AUX_CLASSES).max().item()
                 / labels.numel())
@@ -360,9 +360,9 @@ def build(args, capacity):
 def test_aux(horizon=3):
     """Two halves: the labeller's arithmetic, then a real gradient step.
 
-    The labeller is the part that is easy to get silently wrong -- an
-    off-by-one in the window, or a label leaking across the episode boundary,
-    produces a head that trains happily on garbage.
+    The labeller is the easy part to get silently wrong. An off-by-one in the
+    window, or a label leaking across an episode boundary, gives a head that
+    trains happily on garbage.
     """
     ok = True
 
@@ -450,7 +450,8 @@ def test_aux(horizon=3):
     print(f'buffer holds varied labels {labels_vary}   want True')
     ok &= shape_ok and trained and trunk_moved and labels_vary
 
-    # lambda_aux = 0 must be a true control: same code path, no aux gradient.
+    # lambda_aux = 0 should be a true control: same code path, no aux
+    # gradient. Not asserted here -- it needs two runs to compare.
     print(f'\ncontrol check: lambda_aux=0 leaves the RL path identical to '
           f'stage 10 -- run both and compare the first loss line.')
     print('\nPASS' if ok else '\nFAIL')
