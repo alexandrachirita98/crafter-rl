@@ -22,9 +22,14 @@ echo "node=$(hostname) job=$SLURM_JOB_ID seed=$SLURM_ARRAY_TASK_ID"
 python -c "import torch; assert torch.cuda.is_available(), 'NO GPU'"
 df -h "$HOME" | tail -1
 
+# Stage-specific train.py flags, e.g. EXTRA="--eps-decay-steps 50000".
+# Unquoted on purpose: it has to split into separate words.
+read -r -a EXTRA_ARGS <<< "${EXTRA:-}"
+
 # Raw logdir on node-local scratch; run.sh copies out the small files.
 ./run.sh "${STAGE:?set STAGE}" \
   --steps "${STEPS:-200000}" \
   --seed "$SLURM_ARRAY_TASK_ID" \
   --name "${NAME:-live_run}" \
-  --logdir "${TMPDIR:-/tmp}/crafter-$SLURM_JOB_ID"
+  --logdir "${TMPDIR:-/tmp}/crafter-$SLURM_JOB_ID" \
+  ${EXTRA_ARGS[@]+-- "${EXTRA_ARGS[@]}"}
