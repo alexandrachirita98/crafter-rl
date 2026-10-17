@@ -1,0 +1,22 @@
+{
+  "stage": "stage_10c_no_per",
+  "seed": 1,
+  "total_steps": 2000,
+  "device": "cuda",
+  "episodes": 12,
+  "score_percent": 1.11,
+  "random_baseline_percent": 1.6,
+  "wall_time_min": 0.5,
+  "fps": 69,
+  "achievements_nonzero": {
+    "wake_up": 75.0,
+    "collect_wood": 41.7,
+    "collect_sapling": 25.0,
+    "place_plant": 16.7,
+    "collect_drink": 8.3
+  },
+  "selftest": "PASS",
+  "host": "ucsx-ncit-gpu-wn100",
+  "cluster": "UPB NCIT",
+  "date": "2026-10-17"
+}

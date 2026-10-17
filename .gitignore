@@ -25,3 +25,4 @@ archive/
 venv/
 .idea/
 .vscode/
+/logs/

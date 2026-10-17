@@ -49,7 +49,7 @@ mkdir -p "$PROJ/$USER"/{logs,envs}
 
 # Name varies between cluster images; take the first CUDA module that exists.
 if command -v module >/dev/null 2>&1; then
-  for m in libraries/cuda-13.0 libraries/cuda-12.1 libraries/cuda-11.8 cuda; do
+  for m in libraries/cuda-13 libraries/cuda-13.1 libraries/cuda-13.0 libraries/cuda-12.1 libraries/cuda-11.8 cuda; do
     if module load "$m" 2>/dev/null; then
       echo "loaded module $m"
       break

@@ -1,0 +1,6 @@
+./run.sh 10c --smoke
+
+python stage_10c_no_per/train.py --test-no-per
+python stage_10c_no_per/train.py --total-steps 2000 --seed 1 \
+    --logdir /tmp/crafter-run-823220 --warmup-steps 500 \
+    --buffer-size 5000 --log-every 200

@@ -1,0 +1,63 @@
+$ ./run.sh 10c --smoke
+stage    stage_10c_no_per
+steps    2000
+seeds    1
+results  stage_10c_no_per/results/live_run
+logdir   /tmp/crafter-run-823220
+
+--- self-test: stage_10c_no_per/train.py --test-no-per
+$ python stage_10c_no_per/train.py --test-no-per
+Setting all rngs to seed=0
+buffer is the n-step uniform one   True   want True
+buffer is not prioritised          True   want True
+no total_steps passed to the agent True   want True  (no beta to anneal)
+
+PERQRDQN out of the MRO            True   want True
+_update is QRDQN's (6 args)         True   want True
+_target_quantiles is Munchausen's   True   want True
+
+running 40 steps with reset_every=30:
+[reset] head re-initialised at step 30
+
+ez-greedy committed a walk         True   want True  (15 steps inside a repeat)
+sample() returns 6 tensors         True   want True
+head reset fired                   True   want True
+buffer kept its data               True   want True  (38 transitions)
+
+PASS
+
+--- seed 1: python stage_10c_no_per/train.py --total-steps 2000 --seed 1 --logdir /tmp/crafter-run-823220 --warmup-steps 500 --buffer-size 5000 --log-every 200
+Setting all rngs to seed=1
+stage stage_10c_no_per  seed 1  steps 2,000  device cuda
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/crafter-run-823220/crafter_reward-stage_10c_no_per/1/stats.jsonl
+[   1][     200], R/ep=  3.10, eps=1.00, loss=     nan, meanQ=    nan,   139 fps
+[   2][     400], R/ep=  1.60, eps=1.00, loss=     nan, meanQ=    nan,   136 fps
+[   3][     600], R/ep=  1.10, eps=1.00, loss=  1.2165, meanQ=  0.037,   108 fps
+[   4][     800], R/ep=  1.35, eps=1.00, loss=  1.1165, meanQ=  0.106,    93 fps
+[   5][    1000], R/ep=  1.30, eps=1.00, loss=  0.8628, meanQ=  0.090,    86 fps
+[   6][    1200], R/ep=  1.27, eps=1.00, loss=  0.9982, meanQ=  0.103,    82 fps
+[   8][    1400], R/ep=  0.97, eps=1.00, loss=  0.7408, meanQ=  0.079,    74 fps
+[   9][    1600], R/ep=  0.88, eps=1.00, loss=  1.1811, meanQ=  0.115,    73 fps
+[  11][    1800], R/ep=  0.40, eps=1.00, loss=  1.1811, meanQ=  0.088,    69 fps
+[  12][    2000], R/ep=  0.50, eps=0.99, loss=  1.2594, meanQ=  0.062,    69 fps
+
+done: 12 episodes in 0.5 min (69 fps)
+score over 12 episodes: 1.11%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up               75.0%
+  collect_wood          41.7%
+  collect_sapling       25.0%
+  place_plant           16.7%
+  collect_drink          8.3%
+wrote stage_10c_no_per/results/live_run/stats_seed1.jsonl
+score 1.11%  over 12 episodes  (69 fps)
+wrote /export/home/acs/stud/a/alexandra.chirita98/code/crafter-rl/stage_10c_no_per/results/live_run/summary_seed1.json
+
+=== artifacts in stage_10c_no_per/results/live_run ===
+command_seed1.txt
+selftests.txt
+stats_seed1.jsonl
+summary_seed1.json
+train_seed1.log
