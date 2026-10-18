@@ -245,8 +245,15 @@ device = (re.search(r'device (\w+)', log) or [None, None])[1]
 # The eps the score was actually measured at. A score at eps=0.32 is a third
 # uniform-random actions and is not comparable to one at eps=0.05; the first
 # 200k ladder was read as if it were. Taken from the last progress line.
-eps_seen = re.findall(r'eps=([\d.]+)', log)
-final_eps = float(eps_seen[-1]) if eps_seen else None
+# Prefer the value train.py prints on the done line: the eps= progress
+# lines are gated on --log-every, so a run shorter than one interval
+# (an 8k smoke at the 10k default) has none and used to report null.
+m_eps = re.search(r'final_eps=([\d.]+)', log)
+if m_eps:
+    final_eps = float(m_eps.group(1))
+else:
+    eps_seen = re.findall(r'eps=([\d.]+)', log)
+    final_eps = float(eps_seen[-1]) if eps_seen else None
 
 # Both default to 1M-sized values, so on a 200k run they are part of the
 # result, not background. Read off the command rather than re-plumbed.

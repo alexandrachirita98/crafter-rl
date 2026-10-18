@@ -460,8 +460,10 @@ def main(argv=None, agent_cls=DQN, stage_id=STAGE_ID, extra_args=None,
     _, episodes, elapsed = train(agent, env, step_num=args.total_steps,
                                  log_every=args.log_every)
 
+    # final_eps printed explicitly: the progress lines are gated on
+    # --log-every, so a run shorter than one interval has none to scrape.
     print(f'\ndone: {episodes} episodes in {elapsed / 60:.1f} min '
-          f'({args.total_steps / elapsed:.0f} fps)')
+          f'({args.total_steps / elapsed:.0f} fps), final_eps={agent.eps:.3f}')
     report(logdir, episodes)
 
 
