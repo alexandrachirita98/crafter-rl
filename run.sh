@@ -220,14 +220,30 @@ m = re.search(r'done: (\d+) episodes in ([\d.]+) min \((\d+) fps\)', log)
 wall, fps = (float(m.group(2)), int(m.group(3))) if m else (None, None)
 device = (re.search(r'device (\w+)', log) or [None, None])[1]
 
+# The eps the score was actually measured at. A score at eps=0.32 is a third
+# uniform-random actions and is not comparable to one at eps=0.05; the first
+# 200k ladder was read as if it were. Taken from the last progress line.
+eps_seen = re.findall(r'eps=([\d.]+)', log)
+final_eps = float(eps_seen[-1]) if eps_seen else None
+
+# Both default to 1M-sized values, so on a 200k run they are part of the
+# result, not background. Read off the command rather than re-plumbed.
+cmd = pathlib.Path(os.environ['OUT']).parent.joinpath(
+    f"command_seed{os.environ['SEED']}.txt").read_text().strip()
+def flag(name, default):
+    m = re.search(rf'--{name}\s+(\S+)', cmd)
+    return int(m.group(1)) if m else default
+
 summary = {
     'stage': os.environ['STAGE'],
     'run_kind': os.environ['NAME'],
-    'command': pathlib.Path(os.environ['OUT']).parent.joinpath(f"command_seed{os.environ['SEED']}.txt")
-               .read_text().strip(),
+    'command': cmd,
     'env_steps': int(os.environ['STEPS']),
     'seed': int(os.environ['SEED']),
     'device': device,
+    'final_epsilon': final_eps,
+    'warmup_steps': flag('warmup-steps', 20_000),
+    'buffer_size': flag('buffer-size', 100_000),
     'episodes': n,
     'wall_minutes': wall,
     'fps': fps,
