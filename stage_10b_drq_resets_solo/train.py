@@ -1,20 +1,16 @@
-"""Stage 10b -- DrQ augmentation and periodic resets ALONE, on stage 03.
+"""Stage 10b -- DrQ augmentation and periodic resets alone, on stage 03.
 
-Isolation variant of stage_10_drq_resets. Both mechanisms are regularisers
-that need nothing above Double DQN: the shift augments whatever images the
-buffer hands back, and the reset re-initialises whatever head the net has.
+Both mechanisms are regularisers that need nothing above Double DQN: the shift
+augments whatever images the buffer hands back, the reset re-initialises
+whatever head the net has.
 
-Because stage 03's net is get_estimator's plain nn.Sequential and not the
-dueling two-stream net, _reset_head re-initialises the Linear layers of that
-Sequential instead of the value/adv streams. It reports how many layers it
-touched and how many frames the buffer kept, which is the evidence the stage
-is about -- keep the data, throw away the head.
+Stage 03's net is get_estimator's plain nn.Sequential, not the dueling
+two-stream net, so _reset_head re-initialises that Sequential's Linear layers
+instead of the value/adv streams. It reports how many layers it touched and
+how many frames the buffer kept.
 
 Run:
     python stage_10b_drq_resets_solo/train.py --test-solo
-    python stage_10b_drq_resets_solo/train.py --total-steps 2000 \
-        --warmup-steps 500 --buffer-size 5000 --log-every 200 \
-        --reset-every 800
 """
 
 import pathlib
@@ -124,9 +120,8 @@ def test_solo(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
     buf_at_reset = 0
     # Detect the reset from _reset_head itself rather than computing which
     # call it lands on: learn() increments _step_cnt before the reset check,
-    # so the call that resets is the one ENTERING at reset_every - 1, and
-    # sampling even one call later reads a head that a further gradient step
-    # has already moved.
+    # so the resetting call is the one entering at reset_every - 1, and one
+    # call later the head has already moved again.
     fired = []
     real_reset = agent._reset_head
 
@@ -149,10 +144,9 @@ def test_solo(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
             buf_at_reset = len(buffer)
     agent._reset_head = real_reset
 
-    # The trunk is the CONVS, inside net[0] -- net[1] is the first Linear,
-    # which _reset_head is supposed to re-initialise. Checked against
-    # _reset_head alone, since the reset step also takes a gradient step that
-    # moves the convs legitimately.
+    # The trunk is the convs inside net[0]; net[1] is the first Linear, which
+    # _reset_head should re-initialise. Checked against _reset_head alone,
+    # since the reset step also moves the convs legitimately.
     conv = [m for m in net[0] if isinstance(m, nn.Conv2d)]
     pre_trunk = [c.weight.detach().clone() for c in conv]
     n_layers = agent._reset_head()

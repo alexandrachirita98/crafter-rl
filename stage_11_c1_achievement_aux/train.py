@@ -1,40 +1,30 @@
 """Stage 11 -- an auxiliary head predicting what unlocks next.
 
-Our own addition, following the UNREAL idea (Jaderberg et al. 2017,
-https://arxiv.org/abs/1611.05397). Reward in Crafter arrives maybe once every
-few hundred steps, which is a starvation diet for a conv trunk that has to
-learn to see trees, stone and zombies. But the environment hands us the
-achievement state on every single step, free, and nothing is training on it.
+Our own addition, following UNREAL (Jaderberg et al. 2017,
+https://arxiv.org/abs/1611.05397). Reward arrives maybe once every few hundred
+steps, which is a starvation diet for a conv trunk that has to learn to see
+trees, stone and zombies -- but the environment hands us the achievement state
+every step, free, and nothing is training on it.
 
-So: a second head on the shared trunk, 23-way classification of "which
-achievement unlocks within the next `horizon` steps", class 22 meaning "none
-soon". To predict "a stone pickaxe is coming" the trunk must represent "I hold
-wood and I am standing near stone" -- which is exactly the perception the main
-task needs. The action-selection path is untouched; only the gradient reaching
-the trunk changes.
+So: a second head on the shared trunk, 23-way classification of which
+achievement unlocks within the next `horizon` steps (class 22 = none soon). To
+predict "a stone pickaxe is coming" the trunk must represent "I hold wood and
+I am near stone", which is the perception the main task needs. Action
+selection is untouched; only the gradient reaching the trunk changes.
 
-Why the cheap version works here: the labels come from looking forward in the
-replay buffer. PPO throws its experience away after a few epochs, which is why
-Moon et al. 2023 needed an episodic memory for the same trick. The buffer is a
-DQN thing and it is what lets us skip that machinery.
+Labels come from looking forward in the replay buffer. PPO throws experience
+away after a few epochs, which is why Moon et al. 2023 needed an episodic
+memory for the same trick; the buffer lets us skip that.
 
-Three differences from how the method is usually described, all forced by what
-stages 04-10 actually built:
-
-  1. The usual recipe indexes labels out of the buffer after the fact. Our
-     buffer is a ring of opaque tuples with no stable index into the future,
-     so the label is computed at store time instead, from a lookahead window
-     the agent keeps alongside stage 04's n-step window. Same label, no buffer
-     surgery.
-  2. The transition tuple grows to seven: (s, a, G, s_n, mask, n, y). Both the
-     n-step deque and the prioritised ring carry it.
-  3. The head hangs off QRDuelingNet.trunk, not a 512-wide feature vector --
-     stage 02's measured flatten width is whatever the probe said.
+Two implementation notes. The usual recipe indexes labels out of the buffer
+after the fact, but ours is a ring of opaque tuples with no stable index into
+the future, so labels are computed at store time from a lookahead window kept
+alongside stage 04's n-step window. And the tuple grows to seven --
+(s, a, G, s_n, mask, n, y) -- carried by both the n-step deque and the
+prioritised ring.
 
 Run:
     python stage_11_c1_achievement_aux/train.py --test-aux
-    python stage_11_c1_achievement_aux/train.py --total-steps 2000 \
-        --warmup-steps 500 --buffer-size 5000 --log-every 200
     python stage_11_c1_achievement_aux/train.py --total-steps 200000 --seed 1 \
         --lambda-aux 0.1
 """
@@ -73,13 +63,12 @@ N_AUX_CLASSES = N_ACH + 1       # 23
 class AchievementLabeller:
     """Turns the per-step achievement counts into "what unlocks next" labels.
 
-    Holds a lookahead window of pending transitions. A transition is only
-    emitted once we have seen `horizon` further steps, or the episode ended --
-    we must never look across an episode boundary, since the next episode is a
-    different world and its unlocks say nothing about this state.
+    Holds a lookahead window; a transition is emitted once we have seen
+    `horizon` further steps or the episode ended. Never look across an episode
+    boundary -- the next episode is a different world.
 
-    Counts are cumulative within an episode (crafter increments them), so
-    "newly unlocked" is count[t + k] > count[t], not count[t + k] > 0.
+    Counts are cumulative within an episode, so "newly unlocked" is
+    count[t + k] > count[t], not count[t + k] > 0.
     """
 
     def __init__(self, horizon=100):
@@ -221,10 +210,9 @@ class AuxDrQResets(DrQResets):
         """train_aux() passes the achievement counts for this step."""
         self._pending_counts = counts
         if self._step_cnt >= self._warmup_steps and len(self._buffer) == 0:
-            # Stage 02 sizes warmup against the batch, but stage 04's n-step
-            # window and stage 11's lookahead both hold transitions back, so
-            # a short run can reach the end of warmup with nothing stored.
-            # Sampling here draws unwritten rows. Store and wait instead.
+            # Stage 02 sizes warmup against the batch, but the n-step window
+            # and the lookahead both hold transitions back, so a short run can
+            # end warmup with nothing stored and sample unwritten rows.
             self._store(state, action, reward, state_, mask)
             self._step_cnt += 1
             return

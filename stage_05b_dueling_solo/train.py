@@ -1,19 +1,11 @@
-"""Stage 05b -- the dueling head ALONE, on stage 03.
+"""Stage 05b -- the dueling head alone, on stage 03.
 
-Isolation variant of stage_05_dueling. Stage 05 measures dueling on top of
-stage 04's n-step returns, so its ablation row answers "n-step + dueling vs
-n-step". This file answers "dueling vs plain Double DQN" instead, which is the
-question you need when deciding whether the head is worth keeping on its own.
-
-Nothing changes but the network: the agent is stage 03's DoubleDQN untouched,
-the buffer is stage 02's one-step ReplayMemory, and DuelingNet is imported
-from stage 05 rather than re-typed, so the two rows differ only in what they
-sit on.
+Stage 05 measures dueling on top of n-step returns; this row answers "dueling
+vs plain Double DQN". Only the network differs: stage 03's DoubleDQN, stage
+02's one-step buffer, DuelingNet imported from stage 05.
 
 Run:
     python stage_05b_dueling_solo/train.py --test-solo
-    python stage_05b_dueling_solo/train.py --total-steps 2000 \
-        --warmup-steps 500 --buffer-size 5000 --log-every 200
 """
 
 import pathlib
@@ -51,7 +43,7 @@ def extra_args(p):
 
 
 def test_solo():
-    """The point of this file is what it does NOT inherit.
+    """The point of this file is what it does not inherit.
 
     Checks the agent is stage 03's class with no n-step machinery, the buffer
     pushes five-tuples, and the net is still the dueling one.

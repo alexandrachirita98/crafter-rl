@@ -1,21 +1,16 @@
-"""Stage 05 -- dueling head (the lab notebook's section 8 bonus task).
+"""Stage 05 -- dueling head (lab notebook section 8 bonus task).
 
 Wang et al. 2016, https://arxiv.org/abs/1511.06581
 
-Split "how good is this situation?" from "does this button matter?". In
-Crafter most states are walking across grass, where all 17 actions are nearly
-equivalent, so learning V(s) once is cheaper than learning 17 near-identical
-Q-values.
+Split "how good is this situation?" from "does this button matter?". Most
+Crafter states are walking across grass, where all 17 actions are nearly
+equivalent, so learning V(s) once beats learning 17 near-identical Q-values.
 
-Only the network changes; the agent is stage 04's NStepDoubleDQN untouched.
-The trunk comes out of get_estimator, so the convolutions and the probed
-flatten width are byte-for-byte stage 02's and the ablation row has one
-moving part.
+Only the network changes; the agent is stage 04's NStepDoubleDQN. The trunk
+comes out of get_estimator, so the ablation row has one moving part.
 
 Run:
     python stage_05_dueling/train.py --test-dueling
-    python stage_05_dueling/train.py --total-steps 2000 --warmup-steps 500 \
-        --buffer-size 5000
     python stage_05_dueling/train.py --total-steps 200000 --seed 1
 """
 

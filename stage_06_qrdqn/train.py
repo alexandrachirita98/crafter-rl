@@ -3,21 +3,17 @@
 Dabney, Rowland, Bellemare & Munos 2018, https://arxiv.org/abs/1710.10044,
 section 3 and Appendix A.
 
-Instead of one number per action, output N numbers describing the whole spread
-of outcomes: "this action usually gives 3 but sometimes 12". The agent still
-acts on the mean, but the network has N times more to learn from per sample,
-which is why it helps so much on a small budget. Unlike C51 it needs no
+Output N numbers describing the spread of outcomes rather than one mean. The
+agent still acts on the mean, but the network has N times more to learn from
+per sample, which is why it helps on a small budget. Unlike C51 it needs no
 [V_min, V_max] guess and no projection step.
 
-The network's output becomes (B, 17, N); step acts on the mean over N; _update
-regresses N quantiles with the quantile Huber loss. The target is its own
-method because stage 07 replaces it, and the per-sample loss is its own method
-because stages 08 and 10 reuse it.
+Output becomes (B, 17, N); step acts on the mean over N; _update regresses N
+quantiles with the quantile Huber loss. The target is its own method because
+stage 07 replaces it, the per-sample loss because stages 08 and 10 reuse it.
 
 Run:
     python stage_06_qrdqn/train.py --test-loss
-    python stage_06_qrdqn/train.py --total-steps 2000 --warmup-steps 500 \
-        --buffer-size 5000
     python stage_06_qrdqn/train.py --total-steps 200000 --seed 1
 """
 
@@ -51,7 +47,7 @@ class QRDuelingNet(DuelingNet):
         f = self.trunk(x)
         v = self.value(f).view(-1, 1, self.n_quantiles)
         a = self.adv(f).view(-1, self.action_num, self.n_quantiles)
-        # dim=1 is the ACTION axis. Using dim=2 zeroes each action's mean
+        # dim=1 is the action axis. Using dim=2 zeroes each action's mean
         # return -- exactly what the agent acts on -- and it does not crash.
         return v + a - a.mean(1, keepdim=True)
 

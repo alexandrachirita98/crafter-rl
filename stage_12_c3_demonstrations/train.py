@@ -1,48 +1,38 @@
 """Stage 12 -- expert demonstrations in the replay buffer.
 
-DQfD -- Hester et al. 2018, https://arxiv.org/abs/1704.03732, section 3. This
-is the stage closest to its source: the four mechanisms are the paper's, and
-what we added is the two guard-rails at the bottom plus the Crafter-specific
-screening of which demos are worth keeping.
+DQfD -- Hester et al. 2018, https://arxiv.org/abs/1704.03732, section 3. The
+four mechanisms are the paper's; ours are the two guard-rails at the bottom
+and the screening of which demos are worth keeping.
 
-Why bother. No published agent -- not Rainbow, not DreamerV2 -- ever makes an
-iron pickaxe on Crafter, not once in a million steps. An agent cannot learn
-from an experience it has never had, so instead of hoping it discovers the
-pickaxe we put the pickaxe in its memory. The geometric-mean score is what
-makes this the move worth making: turning a dead 0% into 10% is worth about
-ln(11)/ln(1.005) ~ 480x more than polishing collect_wood from 50% to 51%.
+No published agent -- not Rainbow, not DreamerV2 -- ever makes an iron pickaxe
+on Crafter. An agent cannot learn from an experience it has never had, so
+instead of hoping it discovers the pickaxe we put the pickaxe in its memory.
+The geometric-mean score is what makes this worth doing: a dead 0% to 10% is
+worth about ln(11)/ln(1.005) ~ 480x more than collect_wood 50% to 51%.
 
-The demos come from record_demos.py -- a hand-written BFS planner reading
-info['semantic'], not a learned agent.
+Demos come from record_demos.py -- a hand-written BFS planner reading
+info['semantic'], not a learned agent -- and top out at make_stone_pickaxe, so
+the numbers to report here are stone-tier.
 
-All four DQfD mechanisms, because three of them is not the method:
+All four mechanisms, because three of them is not the method:
 
   1. Loaded before training starts, so they are in memory from step 0.
-  2. Never overwritten -- the ring's write pointer wraps back to n_demo, not 0.
+  2. Never overwritten -- the write pointer wraps back to n_demo, not 0.
   3. A permanent priority bonus, so they keep being sampled long after the
      agent has stopped being surprised by them.
-  4. The margin loss, which is the one people skip. Without it the agent learns
-     what good moves look like but never that anything is bad -- every Q drifts
+  4. The margin loss, the one people skip. Without it the agent learns what
+     good moves look like but never that anything is bad -- every Q drifts
      upward together and the ranking never changes. Hester section 4.3 found
-     removing it the single most damaging ablation.
+     removing it the most damaging ablation.
 
-Differences from the paper's description, forced by what stages 08-11 built:
-
-  - The reference implementation calls buffer.add(obs=..., is_demo=True) and
-    buffer.protect_prefix(). Neither exists here. Our buffer is stage 08's ring
-    of six-tuples (seven with stage 11's label), so protection is a `_floor` on
-    the write pointer and is_demo is an eighth field.
-  - Demos are single steps; the buffer wants n-step returns. The loader runs
-    the same n-step window stage 04 uses, so a demo transition is built exactly
-    like an online one.
-  - Our demos top out at make_stone_pickaxe (see `python record_demos.py`
-    output). Iron is the bar for the result, not for these files, so the
-    numbers to report from this stage are stone-tier ones.
+Two things the paper's API assumes and ours doesn't: there is no
+buffer.add(is_demo=True) or protect_prefix(), so protection is a `_floor` on
+the write pointer and is_demo is an eighth field; and demos are single steps
+while the buffer wants n-step returns, so the loader runs stage 04's window to
+build a demo transition exactly like an online one.
 
 Run:
     python stage_12_c3_demonstrations/train.py --test-demos
-    python stage_12_c3_demonstrations/train.py --total-steps 2000 \
-        --warmup-steps 500 --buffer-size 5000 --log-every 200
     python stage_12_c3_demonstrations/train.py --total-steps 200000 --seed 1
 """
 
@@ -126,11 +116,10 @@ class DemoReplayMemory(AuxPrioritizedReplayMemory):
         B, total = self._batch_size, self._tree.total()
         prefix = (np.arange(B) + np.random.rand(B)) * total / B
         idx = self._tree.find(prefix)
-        # An empty tree has total 0, and find() then walks into the padding
-        # leaves the SumTree allocated to reach a power of two, which index
-        # rows that were never written. It only bites when the n-step window
-        # is still holding everything back at the end of warmup -- a short
-        # smoke test -- but a None row here crashes somewhere confusing.
+        # An empty tree has total 0 and find() then walks into the SumTree's
+        # power-of-two padding leaves, indexing rows never written. Only bites
+        # when the n-step window holds everything back at the end of warmup
+        # (a short smoke test), but the None row crashes somewhere confusing.
         idx = np.clip(idx, 0, max(self._len - 1, 0))
 
         if self._floor and self._len > self._floor:

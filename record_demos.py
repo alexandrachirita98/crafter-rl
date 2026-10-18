@@ -39,6 +39,10 @@ WALKABLE = {MAT['grass'], MAT['path'], MAT['sand']}
 # 10/20 on place_stone over seeds 3000-3019. A 2-stone reserve is one wall
 # plus one spare for a second night.
 SHELTER_STONE = 2
+# A furnace costs 4 stone (crafter/data.yaml:69). place_stone costs 1, and the
+# furnace branch was using that 1 -- so the action was issued at 1 stone, the
+# engine no-oped it, and place_furnace sat at 0/40.
+FURNACE_STONE = 4
 # Start building the night shelter at energy 7, not at 5. Energy drains ~1 per
 # 25 steps awake (objects.py:142), so 7 leaves ~50 steps to find a stone face
 # and dig in -- enough, and still late enough not to interrupt the tech tree.
@@ -342,6 +346,13 @@ class ScriptedExpert:
             if inv['energy'] <= 1:
                 return A['sleep']        # out of options; sleeping beats starving
 
+        return self._tech_tree(sem, pos, inv, ach)
+
+    def _tech_tree(self, sem, pos, inv, ach):
+        """The goal ladder, split out of act() so variants can reorder it.
+
+        act() keeps the anti-stall commit and the survival interrupts.
+        """
         # --- tech tree, in dependency order ---------------------------------
         # 1. wood. Keep a 2-wood float once the stone chain is live, not just
         # 1: a table costs 2 wood and can be placed anywhere, and the stone
@@ -382,7 +393,7 @@ class ScriptedExpert:
             # shelter reserve. Fetching them one at a time left the expert at
             # zero spare stone for 508 of the 772 steps it spent waiting on
             # place_stone (seeds 3000-3009), 84% of them at night.
-            stone_float = SHELTER_STONE + 5
+            stone_float = SHELTER_STONE + 1 + FURNACE_STONE
         if inv['stone'] < stone_float:
             act = self._goto_and_do(sem, pos, {MAT['stone']},
                                     avoid=self.placed_stone)
@@ -423,11 +434,12 @@ class ScriptedExpert:
             if act is not None:
                 return act
         if not ach['place_furnace']:
-            if self._spare_stone(inv) >= 1:
+            if self._spare_stone(inv) >= FURNACE_STONE:
                 act = self._goto_and_place(sem, pos, WALKABLE, A['place_furnace'])
                 if act is not None:
                     return act
-            act = self._goto_and_do(sem, pos, {MAT['stone']})
+            act = self._goto_and_do(sem, pos, {MAT['stone']},
+                                    avoid=self.placed_stone)
             if act is not None:
                 return act
         # 8. coal and iron (need the wood/stone pickaxe we now have)
@@ -844,7 +856,7 @@ class ScriptedExpert:
                 act = self._goto_and_place(sem, pos, WALKABLE, A['place_table'])
                 if act is not None:
                     return act
-            if not has_furnace and inv['stone'] >= 4:
+            if not has_furnace and self._spare_stone(inv) >= FURNACE_STONE:
                 act = self._goto_and_place(sem, pos, WALKABLE, A['place_furnace'])
                 if act is not None:
                     return act
@@ -852,8 +864,9 @@ class ScriptedExpert:
                 act = self._goto_and_do(sem, pos, {MAT['tree']})
                 if act is not None:
                     return act
-            if not has_furnace and inv['stone'] < 4:
-                act = self._goto_and_do(sem, pos, {MAT['stone']})
+            if not has_furnace and self._spare_stone(inv) < FURNACE_STONE:
+                act = self._goto_and_do(sem, pos, {MAT['stone']},
+                                        avoid=self.placed_stone)
                 if act is not None:
                     return act
         for item, mat in (('wood', MAT['tree']), ('coal', MAT['coal']),
@@ -865,8 +878,11 @@ class ScriptedExpert:
         return self._safe_random_move(sem, pos)
 
 
-def play_episode(seed, length):
+def play_episode(seed, length, expert_cls=None):
     """Play one episode, buffering the transitions in memory. No Recorder.
+
+    `expert_cls` selects the planner (default ScriptedExpert) so the variants
+    reuse this function, write_npz() and record() unchanged.
 
     Returns (achievements, steps, transitions) where transitions is the list
     of per-step dicts that write_npz() needs.
@@ -897,7 +913,7 @@ def play_episode(seed, length):
                       reward=True, length=length, seed=seed)
     obs = env.reset()
     transitions = [{'image': obs}]
-    expert = ScriptedExpert(np.random.default_rng(seed))
+    expert = (expert_cls or ScriptedExpert)(np.random.default_rng(seed))
     done, steps, info = False, 0, None
 
     while not done and steps < length:
@@ -952,7 +968,7 @@ def write_npz(transitions, achievements, steps, outdir):
     return name
 
 
-def record(args):
+def record(args, expert_cls=None):
     """Screen many seeds, keep only the episodes worth demonstrating.
 
     This is the part that matters. The expert is good but high-variance -- the
@@ -976,7 +992,7 @@ def record(args):
         # One pass: play, score, and keep the frames. The episode we write is
         # BY CONSTRUCTION the episode we scored -- see play_episode's docstring
         # for why a screen-then-replay design silently fails here.
-        ach, steps, transitions = play_episode(seed, args.length)
+        ach, steps, transitions = play_episode(seed, args.length, expert_cls)
         n = sum(v > 0 for v in ach.values())
         unlocked = {k for k, v in ach.items() if v > 0}
         screened.append(n)
@@ -1016,8 +1032,8 @@ def record(args):
               'on the slide.')
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__)
+def build_parser(description=None):
+    p = argparse.ArgumentParser(description=description or __doc__)
     p.add_argument('--episodes', type=int, default=20,
                    help='how many GOOD episodes to keep')
     p.add_argument('--outdir', type=str, default='demos')
@@ -1030,7 +1046,11 @@ def main():
                    help='achievement names an episode MUST contain to be kept')
     p.add_argument('--max-attempts', type=int, default=400)
     p.add_argument('--verbose', action='store_true')
-    record(p.parse_args())
+    return p
+
+
+def main():
+    record(build_parser().parse_args())
 
 
 if __name__ == '__main__':

@@ -2,25 +2,19 @@
 
 Sutton 1988; Sutton & Barto 2018 ch. 7.
 
-One-step learning moves reward information back one step per gradient update.
 Crafter pays +1 once for an achievement and then nothing for hundreds of
-steps, so a one-step agent has to crawl that signal back link by link. Summing
-the next n real rewards before bootstrapping moves it n steps per update:
+steps, so a one-step agent crawls that signal back link by link. Summing the
+next n real rewards before bootstrapping moves it n steps per update:
 
     G = r_t + gamma*r_{t+1} + ... + gamma^(n-1)*r_{t+n-1}
         + gamma^n * Q_target(s_{t+n}, argmax_a Q_online(s_{t+n}, a))
 
-Three things change: the buffer holds six-tuples (s, a, G, s_n, mask, n),
-_store keeps a sliding window, and _update discounts by gamma ** n using the n
-stored on each sample.
-
-Memory is unchanged: the window holds s_0 and s_n, two frames per transition,
-the same as stage 02's (s, s_).
+The buffer holds six-tuples (s, a, G, s_n, mask, n), _store keeps a sliding
+window, and _update discounts by gamma ** n per sample. Memory is unchanged:
+the window holds s_0 and s_n, two frames, same as stage 02's (s, s_).
 
 Run:
     python stage_04_nstep/train.py --test-nstep
-    python stage_04_nstep/train.py --total-steps 2000 --warmup-steps 500 \
-        --buffer-size 5000
     python stage_04_nstep/train.py --total-steps 200000 --seed 1
 """
 
@@ -91,7 +85,7 @@ class NStepDoubleDQN(DoubleDQN):
 
         # n is (B,1) and differs per sample: a window cut short by death
         # accumulated fewer rewards, so it discounts by gamma ** its own n.
-        # Using gamma ** self._n_step for every row is the classic n-step bug
+        # Using gamma ** self._n_step for every row is the classic n-step bug,
         # and it does not crash.
         target_qsa = rewards + (self._gamma ** n) * qsa_ * mask
 

@@ -1,29 +1,17 @@
-"""Stage 07b -- Munchausen ALONE, on stage 03.
+"""Stage 07b -- Munchausen alone, on stage 03.
 
-Isolation variant of stage_07_munchausen. The cumulative stage 07 sits on
-n-step, dueling and QR-DQN, so its row cannot say what Munchausen is worth by
-itself. This file adds the bonus and the soft bootstrap to stage 03 and
-changes nothing else.
-
-This is M-DQN, the scalar method of the paper's section 3 -- the base version,
-not the M-IQN variant the cumulative stage implements. The bonus and the soft
-value are identical in form; they just act on one Q-value per action instead
-of 51 quantiles:
+M-DQN, the scalar method of the paper's section 3, not the M-IQN variant stage
+07 implements. Same bonus and soft value, acting on one Q-value per action
+instead of 51 quantiles:
 
     target = r + alpha*tau*log pi(a_t|s_t)  +  gamma * mask * sum_a pi(a|s')
              * (Q(s',a) - tau*log pi(a|s'))
 
-The soft bootstrap REPLACES the Double-DQN argmax -- the next-state value is
-an expectation under pi, not the value of one chosen action. That is part of
-the method, so this row is "Munchausen vs stage 03", not "Munchausen added to
-stage 03".
-
-_update only, the same single-method change the cumulative stage makes.
+The soft bootstrap replaces the Double-DQN argmax, so this row is "Munchausen
+vs stage 03", not "Munchausen added to stage 03". _update only.
 
 Run:
     python stage_07b_munchausen_solo/train.py --test-solo
-    python stage_07b_munchausen_solo/train.py --total-steps 2000 \
-        --warmup-steps 500 --buffer-size 5000 --log-every 200
 """
 
 import pathlib
@@ -69,7 +57,7 @@ class MunchausenDoubleDQN(DoubleDQN):
         logp = F.log_softmax(tgt(states) / TAU, dim=1)
         bonus = (ALPHA * TAU * logp.gather(1, actions)).clamp(min=CLIP)  # (B,1)
         # 2. the soft bootstrap: expectation under pi of (Q - tau * log pi).
-        #    NOT an argmax -- this replaces stage 03's double target.
+        #    not an argmax -- this replaces stage 03's double target.
         q_ = tgt(states_)                                               # (B,A)
         logp_ = F.log_softmax(q_ / TAU, dim=1)
         pi_ = logp_.exp()
@@ -148,7 +136,7 @@ def test_solo(batch=16, gamma=0.99):
     # exceeds ~0.3, so soft == max_q above and that is the paper's intent --
     # the entropy term is a small regulariser, not a smoothed bootstrap.
     # Testing "soft < max_q" at the default spread would fail on correct code.
-    # The expectation only shows itself when the Q values are CLOSE, so check
+    # The expectation only shows itself when the Q values are close, so check
     # it in the regime where it is actually distinguishable from an argmax.
     tight = torch.randn(batch, N_ACTIONS) * (TAU / 3.0)
     agent._target_estimator = lambda x: tight

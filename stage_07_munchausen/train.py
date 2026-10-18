@@ -4,27 +4,19 @@ Vieillard, Pietquin & Geist 2020, https://arxiv.org/abs/2007.14430, section 3
 plus the hyperparameters.
 
 Add to the reward a bonus for having done what you already believed was good:
-alpha * tau * log pi(a|s), with pi the softmax of your own Q-values. It sounds
-circular and it works, acting as an implicit KL regulariser that stops the
-policy thrashing between updates.
+alpha * tau * log pi(a|s), with pi the softmax of your own Q-values. It acts
+as an implicit KL regulariser that stops the policy thrashing between updates.
 
-_target_quantiles only. Two things to notice:
+_target_quantiles only, but note two things. The soft bootstrap replaces the
+Double-DQN argmax -- the next-state value is an expectation under pi, not the
+value of one action -- so from here on "double" is gone. And with quantiles
+the bonus is a scalar per sample broadcast over N, with the soft value taken
+per quantile and pi from the mean: the M-IQN construction from the appendix.
 
-  - The soft bootstrap REPLACES the Double-DQN argmax. The next-state value is
-    an expectation under pi, not the value of one chosen action. That is part
-    of the method, not an optional refinement, so from here on "double" is
-    gone and the deck's stage table should say so.
-  - With quantiles the bonus is a scalar per sample broadcast over the N
-    quantiles, and the soft value is taken per quantile with pi from the mean.
-    This is the M-IQN construction from the paper's appendix.
-
-With n-step, the bonus is for the FIRST action of the window, which is the
-action the transition is about.
+With n-step, the bonus is for the first action of the window.
 
 Run:
     python stage_07_munchausen/train.py --test-munchausen
-    python stage_07_munchausen/train.py --total-steps 2000 --warmup-steps 500 \
-        --buffer-size 5000
     python stage_07_munchausen/train.py --total-steps 200000 --seed 1
 """
 
@@ -58,7 +50,7 @@ class MunchausenQRDQN(QRDQN):
         logp = F.log_softmax(tgt(states).mean(2) / TAU, dim=1)
         bonus = (ALPHA * TAU * logp.gather(1, actions)).clamp(min=CLIP)  # (B,1)
         # 2. the soft bootstrap: expectation under pi of
-        #    (quantiles - tau * log pi). NOT an argmax.
+        #    (quantiles - tau * log pi), not an argmax.
         quant_ = tgt(states_)                                           # (B,A,N)
         logp_ = F.log_softmax(quant_.mean(2) / TAU, dim=1)              # (B,A)
         pi_ = logp_.exp()
@@ -80,19 +72,14 @@ def test_munchausen(batch=16, n_quant=51, gamma=0.99):
     """Build the agent without a network and check the two target pieces.
 
     1. rewards = 0, mask = 0: the target is the bonus alone, repeated over
-       every quantile. Every bonus lies in [CLIP, 0], and with tau = 0.03
-       against a mean-Q spread of about 2 some rows sit exactly on the clip.
-       If none does, the clip is not wired in.
-
-       The spread has to be built deliberately: averaging 51 standard-normal
-       quantiles leaves a per-action spread near 0.5, where the raw bonus
-       bottoms out around -0.6 and never reaches -1. Scaling the fixed
-       quantiles by Q_SPREAD puts it in the range the paper's defaults are
-       tuned for.
+       every quantile. Every bonus lies in [CLIP, 0] and some rows should sit
+       exactly on the clip; if none does, the clip is not wired in. The spread
+       has to be built deliberately -- averaging 51 standard-normal quantiles
+       leaves a per-action spread near 0.5, where the raw bonus bottoms out
+       near -0.6, so Q_SPREAD scales it into the paper's tuned range.
     2. rewards = 0, mask = 1, n = 1: (target - bonus) / gamma is the soft
-       value. Its mean over quantiles is at most max_a Q(s',a) + tau*log(17)
-       for every row, because the entropy bonus is bounded by log of the
-       action count.
+       value, whose mean over quantiles is at most max_a Q(s',a) + tau*log(17),
+       the entropy bonus being bounded by log of the action count.
     """
     torch.manual_seed(0)
     agent = MunchausenQRDQN.__new__(MunchausenQRDQN)

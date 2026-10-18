@@ -1,18 +1,14 @@
 """Stage 10 -- DrQ image augmentation plus periodic head resets.
 
-DrQ -- Kostrikov, Yarats & Fergus 2021, https://arxiv.org/abs/2004.13649.
-Pad each sampled image 4 px and random-crop back, which teaches "a tree is a
-tree wherever it sits in the frame".
+DrQ -- Kostrikov, Yarats & Fergus 2021, https://arxiv.org/abs/2004.13649. Pad
+each sampled image 4 px and random-crop back: a tree is a tree wherever it
+sits in the frame.
 
-Periodic resets -- Nikishin et al. 2022, https://arxiv.org/abs/2205.07802,
-8 pages. Every 100k steps re-initialise the head and KEEP THE BUFFER. Early
-garbage experience leaves a permanent dent (primacy bias); this un-dents it
-while keeping the data.
-
-The buffer is NOT cleared. That is the whole trick: keep the data, throw away
-the overfitted head. Expect a dip in the return curve right after each reset
-that recovers within a few thousand steps; if it does not recover, the head is
-not the problem and the stage gets reverted.
+Resets -- Nikishin et al. 2022, https://arxiv.org/abs/2205.07802. Every 100k
+steps re-initialise the head and keep the buffer. Early garbage experience
+leaves a permanent dent (primacy bias); this un-dents it while keeping the
+data. Expect a dip in the return curve after each reset that recovers within a
+few thousand steps.
 
 _per_sample gets its inputs shifted; learn gets a reset check. The shift works
 on what _to_tensor produces, uint8 NCHW, and hands back uint8 because
@@ -20,8 +16,6 @@ ByteToFloat asserts on anything else.
 
 Run:
     python stage_10_drq_resets/train.py --test-drq
-    python stage_10_drq_resets/train.py --total-steps 2000 --warmup-steps 500 \
-        --buffer-size 5000
     python stage_10_drq_resets/train.py --total-steps 200000 --seed 1
 """
 
@@ -145,9 +139,9 @@ def test_drq(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
                 net.adv[-1].weight.detach(),
                 agent._target_estimator.adv[-1].weight.detach())
 
-    # The trunk is checked against _reset_head alone. At the reset step the
-    # agent also takes a gradient step, which moves the trunk legitimately,
-    # so measuring there would fail on correct code.
+    # Checked against _reset_head alone: the reset step also takes a gradient
+    # step, which moves the trunk legitimately, so measuring there would fail
+    # on correct code.
     pre_trunk = net.trunk[1].weight.detach().clone()
     agent._reset_head()
     trunk_kept = torch.equal(pre_trunk, net.trunk[1].weight.detach())

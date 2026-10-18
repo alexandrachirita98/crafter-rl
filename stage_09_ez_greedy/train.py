@@ -1,25 +1,20 @@
 """Stage 09 -- epsilon-z-greedy: committed random walks instead of twitching.
 
-Dabney, Ostrovski & Barreto 2021, https://arxiv.org/abs/2006.01782. Short and
-readable.
+Dabney, Ostrovski & Barreto 2021, https://arxiv.org/abs/2006.01782
 
 Crafter's map is 64x64 tiles and the agent sees 9x9. Standard epsilon-greedy
-picks a FRESH random action each time, so the random part of the behaviour is
+picks a fresh random action each step, so the random part of the behaviour is
 a twitch in place that never travels anywhere new. Instead, when exploring,
 commit to one action for a random number of steps drawn from a heavy-tailed
 zeta distribution -- capped, see the comment in step().
 
-This is the budget version of EDE's exploration: EDE runs a 5-head ensemble
-and Thompson-samples the epistemic uncertainty at 5x the output-layer cost.
-Committed random walks chase the same goal for roughly nothing. Say it that
-way in the deck.
+The budget version of EDE's exploration, which runs a 5-head ensemble and
+Thompson-samples epistemic uncertainty at 5x the output-layer cost.
 
 step() only, plus two lines in end_episode().
 
 Run:
     python stage_09_ez_greedy/train.py --test-ez
-    python stage_09_ez_greedy/train.py --total-steps 2000 --warmup-steps 500 \
-        --buffer-size 5000
     python stage_09_ez_greedy/train.py --total-steps 200000 --seed 1
 """
 
@@ -48,7 +43,7 @@ class EzGreedy(PERQRDQN):
     def step(self, state):
         if self._step_cnt < self._warmup_steps:
             return torch.randint(self._action_num, (1,)).item()
-        # Advance the schedule EVERY step, repeating or not, so epsilon decays
+        # Advance the schedule every step, repeating or not, so epsilon decays
         # on the same clock as stages 02-08.
         self.eps = next(self._epsilon)
         if self._repeat_left > 0:
@@ -56,11 +51,10 @@ class EzGreedy(PERQRDQN):
             return self._repeat_action
         if torch.rand(1).item() < self.eps:
             self._repeat_action = torch.randint(self._action_num, (1,)).item()
-            # THE CAP IS NOT OPTIONAL. Measured over 200k draws, zipf(2.0) has
-            # a median of 1 and a p99 of about 60 -- but a max above 300,000.
-            # One uncapped draw would hold a single action for 30 entire
-            # episodes. Capped at 100 the mean is 3.8 and p99 stays about 60,
-            # so the heavy tail survives.
+            # The cap is not optional: over 200k draws zipf(2.0) has a median
+            # of 1 and a p99 near 60, but a max above 300,000 -- one draw would
+            # hold an action for 30 episodes. Capped at 100 the mean is 3.8 and
+            # p99 stays near 60, so the tail survives.
             self._repeat_left = min(int(np.random.zipf(self._mu)), self._cap) - 1
             return self._repeat_action
         with torch.no_grad():

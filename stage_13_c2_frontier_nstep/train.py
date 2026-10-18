@@ -1,41 +1,30 @@
 """Stage 13 -- n driven by the tech-tree frontier.
 
-Our own idea, and the one most likely to turn out to do nothing: if the agent
-never gets past tier 2 the dial never moves and this reduces to fixed n = 10.
-That is why it is built last, after stage 12 gives the agent something to climb
-with.
+Our own idea, and the one most likely to do nothing: if the agent never gets
+past tier 2 the dial never moves and this reduces to fixed n = 10. Hence built
+last, after stage 12 gives the agent something to climb with.
 
 BBF (Schwarzer et al. 2023, https://arxiv.org/abs/2305.19452) section 3 anneals
-n from 10 to 3 as the step counter ticks up. Our change is the trigger, not the
+n from 10 to 3 on the step counter. Our change is the trigger, not the
 schedule: a step counter is a guess at progress, where the frontier is the
-progress. Two seeds that reach the stone pickaxe at 300k and 600k want the dial
-turned at different moments, and a fixed schedule has to get one of them wrong.
+progress. Two seeds reaching the stone pickaxe at 300k and 600k want the dial
+turned at different moments, and a fixed schedule has to get one of them
+wrong. Long n while the agent is still finding its first rewards, because
+reward has to travel far back; short n once it is deep in the tech tree, where
+targets are dense and long n is mostly variance.
 
-The logic in one line: long n (10) while the agent is still finding its first
-rewards, because reward has to travel a long way back; short n (3) once it is
-deep in the tech tree, because by then the targets are dense and a long n is
-mostly variance.
+The tracker sets the agent's live `_n_step` (what stage 04's window reads) and
+only at an episode boundary, after end_episode() has flushed -- mid-episode it
+would leave the open window holding a mix of lengths. It needs
+info['achievements'] at the done step, which stage 11's loop already carries.
 
-Differences from the sketch this started as:
-
-  - The sketch sets `args.n_step = tracker.end_of_episode(...)`. Nothing reads
-    args after startup. The live value is the agent's `_n_step`, used by stage
-    04's window, so that is what the tracker sets.
-  - Changing n mid-episode would leave the open window holding a mix of
-    lengths, so the tracker only ever acts at an episode boundary, after
-    end_episode() has flushed.
-  - The tracker needs info['achievements'] at the done step. Stage 11's loop
-    already carries it, so the loop passes it on rather than re-deriving it.
-
-Three controls to compare against, all flags on this file:
+Controls, all flags on this file:
     --fixed-n 3      BBF's endpoint
     --fixed-n 10     stage 04's default, the real baseline
     --bbf-schedule   step-based annealing, the published trigger
 
 Run:
     python stage_13_c2_frontier_nstep/train.py --test-frontier
-    python stage_13_c2_frontier_nstep/train.py --total-steps 2000 \
-        --warmup-steps 500 --buffer-size 5000 --log-every 200
     python stage_13_c2_frontier_nstep/train.py --total-steps 200000 --seed 1
 """
 

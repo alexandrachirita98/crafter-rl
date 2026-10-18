@@ -1,21 +1,16 @@
-"""Stage 06b -- QR-DQN ALONE, on stage 03.
+"""Stage 06b -- QR-DQN alone, on stage 03.
 
-Isolation variant of stage_06_qrdqn. Stage 06 sits on n-step returns AND the
-dueling head, so its row cannot tell you which of the three is doing the work.
-This file changes only the loss and the head width: 51 quantiles per action
-instead of one mean, quantile Huber regression instead of MSE, one-step
-targets, no dueling split, no n-step window.
+Stage 06 sits on n-step returns and the dueling head; this changes only the
+loss and the head width -- 51 quantiles per action, quantile Huber instead of
+MSE, one-step targets, no dueling split, no n-step window.
 
-The one-step target is the reason this is not a two-line subclass. The
-cumulative QRDQN takes `n` as a tensor from stage 04's six-tuple buffer and
-discounts by gamma ** n; here the buffer hands back stage 02's five-tuples, so
-the discount is a plain gamma. Everything else -- the loss, the taus, the
-per-sample split -- is imported from stage 06 unchanged.
+The one-step target is why this is not a two-line subclass: the cumulative
+QRDQN discounts by gamma ** n from stage 04's six-tuples, while here the
+buffer hands back stage 02's five-tuples and the discount is a plain gamma.
+Loss, taus and the per-sample split are imported from stage 06.
 
 Run:
     python stage_06b_qrdqn_solo/train.py --test-solo
-    python stage_06b_qrdqn_solo/train.py --total-steps 2000 \
-        --warmup-steps 500 --buffer-size 5000 --log-every 200
 """
 
 import pathlib

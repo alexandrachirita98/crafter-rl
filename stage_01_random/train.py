@@ -1,22 +1,12 @@
-"""Stage 01 -- random agent.
+"""Stage 01 -- random agent: 17 actions uniformly at random, writes stats.jsonl.
 
-WHERE: local. Free, no GPU, no RunPod.
-
-WHAT: picks one of the 17 actions uniformly at random, writes stats.jsonl.
-
-WHY THIS IS STAGE 1. Not for the baseline curve, although the assignment does
-require one (assignment_v0.pdf section 2.1d). It exists to VALIDATE THE SCORER
-BEFORE THERE IS AN AGENT TO SCORE. Two numbers have to come out right:
-
-  1. this agent scores about 1.6%           (the published Random row)
-  2. our scorer on the shipped scores/*.json reproduces Rainbow at 4.31%
-
-The second is the real gate, and it is checked by `python -m common.validate_scorer`.
-It means that when we later write "ours 4.8% vs Rainbow 4.3%", both numbers came
-out of the same function. Without it we are comparing two codebases by eye.
+It exists to validate the scorer before there is an agent to score. This agent
+should land near the published Random row (1.6%), and our scorer on the
+shipped scores/*.json should reproduce Rainbow at 4.31%. The second is the
+real gate -- `python -m common.validate_scorer` -- so that "ours 4.8% vs
+Rainbow 4.3%" is two numbers out of one function.
 
 Run:
-    python stage_01_random/train.py --total-steps 2000          # smoke test
     python stage_01_random/train.py --total-steps 1000000 --seed 1
 """
 

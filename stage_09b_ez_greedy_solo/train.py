@@ -1,17 +1,12 @@
-"""Stage 09b -- epsilon-z-greedy ALONE, on stage 03.
+"""Stage 09b -- epsilon-z-greedy alone, on stage 03.
 
-Isolation variant of stage_09_ez_greedy. Exploration is the one change here
-that is purely behavioural: it touches action selection and nothing else, so
-it isolates cleanly onto stage 03 with no reimplementation at all.
-
-Only step() and end_episode() change. The network, the buffer, the loss and
-the target are stage 03's. That makes this the cleanest row in the ablation
-table: any difference from stage 03 is the walk.
+Exploration is the one change that is purely behavioural, so it isolates onto
+stage 03 with no reimplementation. Only step() and end_episode() change --
+network, buffer, loss and target are stage 03's -- so any difference from
+stage 03 is the walk.
 
 Run:
     python stage_09b_ez_greedy_solo/train.py --test-solo
-    python stage_09b_ez_greedy_solo/train.py --total-steps 2000 \
-        --warmup-steps 500 --buffer-size 5000 --log-every 200
 """
 
 import pathlib
@@ -44,7 +39,7 @@ class EzGreedyDoubleDQN(DoubleDQN):
     def step(self, state):
         if self._step_cnt < self._warmup_steps:
             return torch.randint(self._action_num, (1,)).item()
-        # Advance the schedule EVERY step, repeating or not, so epsilon decays
+        # Advance the schedule every step, repeating or not, so epsilon decays
         # on the same clock as stage 03.
         self.eps = next(self._epsilon)
         if self._repeat_left > 0:
@@ -53,9 +48,9 @@ class EzGreedyDoubleDQN(DoubleDQN):
             return self._repeat_action
         if torch.rand(1).item() < self.eps:
             self._repeat_action = torch.randint(self._action_num, (1,)).item()
-            # THE CAP IS NOT OPTIONAL: uncapped zipf(2.0) draws exceed 300,000,
-            # which would hold one action for 30 entire episodes. See the
-            # measurements in stage_09_ez_greedy's --test-ez.
+            # The cap is not optional: uncapped zipf(2.0) draws exceed
+            # 300,000, holding one action for 30 episodes. Measurements in
+            # stage_09_ez_greedy's --test-ez.
             drawn = min(int(np.random.zipf(self._mu)), self._cap)
             self._repeat_left = drawn - 1
             self.draws += 1
@@ -138,7 +133,7 @@ def test_solo(steps=20_000, capacity=2000, batch=8):
     print(f'  steps inside a commitment {agent.committed_steps:,} ({pct:.1f}%)')
     print(f'  longest single draw {agent.longest_draw} (cap {agent._cap})')
     fired = agent.committed > 0 and pct > 20
-    # Measure the DRAW, not the observed run of identical actions: two
+    # Measure the draw, not the observed run of identical actions: two
     # adjacent draws pick the same action 1 in 17 times, so identical runs
     # legitimately exceed the cap while no single draw does.
     capped = agent.longest_draw <= agent._cap

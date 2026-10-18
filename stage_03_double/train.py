@@ -1,22 +1,18 @@
-"""Stage 03 -- Double DQN, from the lab notebook (section 5, TASK 4).
+"""Stage 03 -- Double DQN (lab notebook section 5, TASK 4).
 
 van Hasselt, Guez & Silver 2016, https://arxiv.org/abs/1509.06461
 
-Stage 02's target takes max over 17 noisy estimates, which is biased upward:
-the action with the luckiest estimate is the one picked, so its error never
-averages away. Double DQN splits the two jobs -- the online net picks the next
-action, the target net says what it is worth:
+Stage 02's max over 17 noisy estimates is biased upward: the luckiest estimate
+is the one picked, so its error never averages away. Double DQN splits the two
+jobs -- the online net picks the next action, the target net prices it:
 
     a*     = argmax_a' Q_online(s', a')
     target = r + gamma * mask * Q_target(s', a*)
 
-Everything else is imported from stage 02, so this stage changes one method.
-Expect a small gain: mean-Q lower than stage 02's at the same step, return
-equal or better. Lower mean-Q at equal return is the result.
+Everything else is imported from stage 02. Expect mean-Q lower than stage 02's
+at the same step, return equal or better.
 
 Run:
-    python stage_03_double/train.py --total-steps 2000 --warmup-steps 500 \
-        --buffer-size 5000
     python stage_03_double/train.py --total-steps 200000 --seed 1
 """
 

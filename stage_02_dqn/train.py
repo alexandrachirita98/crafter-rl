@@ -1,25 +1,20 @@
 """Stage 02 -- plain DQN, from the course lab notebook 02_rainbow_sol.ipynb.
 
-The lab's code kept as-is, adapted where Crafter needs it:
+The lab's code, adapted where Crafter needs it:
 
-  1. Crafter uses the old Gym 4-tuple API: obs, reward, done, info. reset()
-     returns obs alone.
-  2. done is True both on death and on the 10,000-step cap. A timeout must
-     still bootstrap, so transitions store info['discount'] as `mask` and the
-     target multiplies by it instead of by (1 - done).
-  3. The flatten width is measured, not hard-coded -- the lab's 9*16 is sized
-     for MiniGrid's tile view.
-  4. _to_tensor does the permute/batch/to-device that the lab's TorchWrapper
-     did inside the env.
-  5. ReplayMemory stores uint8 numpy frames; the lab's per-step GPU tensors
-     don't scale to 1M.
+  - Old Gym 4-tuple API: obs, reward, done, info; reset() returns obs alone.
+  - done is True both on death and on the 10,000-step cap, and a timeout must
+    still bootstrap, so transitions store info['discount'] as `mask` and the
+    target multiplies by that instead of (1 - done).
+  - The flatten width is measured, not hard-coded -- the lab's 9*16 is sized
+    for MiniGrid's tile view.
+  - ReplayMemory stores uint8 numpy frames; the lab's per-step GPU tensors
+    don't scale to 1M.
 
 MSE loss, no gradient clipping and the biased max target are the lab's and are
 left alone -- stage 03 replaces the target, later stages the loss.
 
 Run:
-    python stage_02_dqn/train.py --total-steps 2000 --warmup-steps 500 \
-        --buffer-size 5000
     python stage_02_dqn/train.py --total-steps 200000 --seed 1
 """
 

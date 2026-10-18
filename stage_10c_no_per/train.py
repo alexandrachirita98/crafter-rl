@@ -1,30 +1,24 @@
 """Stage 10c -- the full stack minus prioritised replay: 04+05+06+07+09+10.
 
-Ablation of stage_10_drq_resets. Same six mechanisms, uniform replay instead
+Ablation of stage_10_drq_resets -- same six mechanisms, uniform replay instead
 of the sum-tree:
 
     04 n-step returns        05 dueling head      06 QR-DQN
     07 Munchausen            09 epsilon-z-greedy  10 DrQ + head resets
 
-Stage 08's own docstring predicted a null result and said what to do if 200k
-x 2 seeds showed nothing: inherit from MunchausenQRDQN and use stage 06's
-build. That is exactly this file. It is the cheaper agent -- no sum-tree
-updates, no priority bookkeeping -- so if it matches stage 10 within noise,
-the deck's recommended agent is this one and PER stays on disk for stage 12,
-which needs the machinery for the demonstration bonus rather than for any
-gain of its own.
+This is the contingency stage 08 described. It is the cheaper agent -- no
+sum-tree updates, no priority bookkeeping -- so if it matches stage 10 within
+noise, this is the one to recommend and PER waits for stage 12, which needs
+the machinery for the demonstration bonus rather than for any gain of its own.
 
-Nothing here is new method. EzGreedy and DrQResets both reach into stage 08
-only through _per_sample and _update, which QRDQN also provides at the
-six-argument signature, so the two behaviours are re-mixed onto
-MunchausenQRDQN unchanged. The one thing that genuinely goes away is beta:
-with no importance weights there is nothing to anneal, so --total-steps is no
+No new method here. EzGreedy and DrQResets reach into stage 08 only through
+_per_sample and _update, which QRDQN also provides at the six-argument
+signature, so both behaviours re-mix onto MunchausenQRDQN unchanged. What goes
+away is beta: no importance weights, nothing to anneal, so --total-steps is no
 longer passed into the agent.
 
 Run:
     python stage_10c_no_per/train.py --test-no-per
-    python stage_10c_no_per/train.py --total-steps 2000 --warmup-steps 500 \
-        --buffer-size 5000
     python stage_10c_no_per/train.py --total-steps 200000 --seed 1
 """
 
@@ -48,19 +42,16 @@ STAGE_ID = 'stage_10c_no_per'
 class NoPerStack(MunchausenQRDQN):
     """Stages 09 and 10's behaviour on MunchausenQRDQN instead of PERQRDQN.
 
-    Subclassing DrQResets and EzGreedy directly does not work: both already
-    inherit PERQRDQN, so it stays in any MRO built from them and its
-    eight-argument _update comes with it -- adding a sibling base cannot
-    take a class out of the chain. Borrowing the methods as unbound
-    functions does not work either: their zero-argument super() is compiled
-    against the class that defines them, so it still routes into stage 08.
+    Subclassing DrQResets and EzGreedy does not work: both inherit PERQRDQN,
+    so it stays in any MRO built from them and brings its eight-argument
+    _update along. Borrowing the methods as unbound functions does not work
+    either -- their zero-argument super() is compiled against the defining
+    class, so it still routes into stage 08.
 
-    So the four overrides are spelled out here. They are short, and each is
-    the same code as the stage it comes from -- stage 09's step() and
-    end_episode(), stage 10's _per_sample(), learn() and _reset_head() --
-    differing only in which class super() reaches. random_shift is imported,
-    being a plain function with nothing to rebind. Changes to stage 09 or 10
-    do NOT propagate here; this file has to be updated with them.
+    So the overrides are spelled out: stage 09's step() and end_episode(),
+    stage 10's _per_sample(), learn() and _reset_head(), each differing only
+    in which class super() reaches. random_shift is imported as-is. Changes
+    to stage 09 or 10 do not propagate here.
     """
 
     def __init__(self, *args, ez_mu=2.0, ez_max_repeat=100,

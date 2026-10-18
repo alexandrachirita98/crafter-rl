@@ -6,24 +6,18 @@ sum-tree.
 Sample with probability proportional to (loss + eps) ** alpha and correct the
 bias with importance weights, beta annealed 0.4 -> 1.0 over the run.
 
-EXPECT NOTHING FROM THIS, AND THAT IS FINE. EDE deleted prioritised replay and
-got 2.7x better. We build it for one reason -- contribution 3 needs the
-machinery, because demo transitions get
-a permanent priority bonus. A null result here is the expected outcome, not a
-bug to hunt. If 200k x 2 seeds shows nothing, stage 09 inherits from
-MunchausenQRDQN and uses stage 06's build, the sum-tree stays on disk for
-stage 12, and the slide says "null, as predicted".
+A null result is the expected outcome here, not a bug: EDE deleted prioritised
+replay and got 2.7x better. We build it because contribution 3 needs the
+machinery -- demo transitions get a permanent priority bonus. If 200k x 2
+seeds shows nothing, stage 09 inherits from MunchausenQRDQN and uses stage
+06's build, and the sum-tree waits for stage 12.
 
-The lab's deque has no stable indices, so the prioritised buffer is a
-fixed-size list with a write pointer plus SumTree from common/replay.py
-(already tested by `python -m common.replay`). sample() returns the six
-stage-04 tensors plus the leaf indices and the IS weights, and _update takes
-those two extra arguments.
+The lab's deque has no stable indices, so the buffer is a fixed-size list with
+a write pointer plus SumTree from common/replay.py. sample() returns the six
+stage-04 tensors plus leaf indices and IS weights; _update takes those two.
 
 Run:
     python stage_08_per/train.py --test-per
-    python stage_08_per/train.py --total-steps 2000 --warmup-steps 500 \
-        --buffer-size 5000
     python stage_08_per/train.py --total-steps 200000 --seed 1
 """
 

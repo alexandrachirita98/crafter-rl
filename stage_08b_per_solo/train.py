@@ -1,24 +1,16 @@
-"""Stage 08b -- prioritised replay ALONE, on stage 03.
+"""Stage 08b -- prioritised replay alone, on stage 03.
 
-Isolation variant of stage_08_per. The cumulative stage 08 prioritises by the
-per-sample QUANTILE loss, which only exists once stage 06 is in; this one
-prioritises by |TD error| on stage 03's scalar target, which is Schaul's
-original formulation and needs nothing above Double DQN.
+Stage 08 prioritises by the per-sample quantile loss, which needs stage 06;
+this prioritises by |TD error| on stage 03's scalar target, Schaul's original
+formulation. Same PrioritizedReplayMemory, holding five-tuples instead of six,
+and _update is stage 03's loss made per-sample so it can be both weighted and
+used as a priority.
 
-So the buffer is the same PrioritizedReplayMemory (imported, not re-typed),
-holding stage 02's five-tuples instead of stage 04's six, and _update is
-stage 03's loss made per-sample so it can be both weighted and used as a
-priority.
-
-Expect nothing from this, same as the cumulative stage: EDE deleted
-prioritised replay and got 2.7x better. The isolated row exists so a null
-result can be attributed to PER itself rather
-than to PER-on-top-of-five-other-things.
+Expect nothing here either. The isolated row exists so a null result lands on
+PER itself rather than on PER-on-top-of-five-other-things.
 
 Run:
     python stage_08b_per_solo/train.py --test-solo
-    python stage_08b_per_solo/train.py --total-steps 2000 \
-        --warmup-steps 500 --buffer-size 5000 --log-every 200
 """
 
 import pathlib
