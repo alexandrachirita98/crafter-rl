@@ -1,0 +1,16 @@
+$ python stage_10_drq_resets/train.py --test-drq
+Setting all rngs to seed=0
+shift keeps (8, 3, 64, 64) uint8   True   want True
+shift actually moves pixels        True   want True
+
+running 40 steps with reset_every=30:
+[reset] head re-initialised at step 30
+[reset] head re-initialised at step 40
+
+at the reset step:
+  adv head re-initialised  True   want True
+  target net re-synced     True   want True
+_reset_head leaves trunk   True   want True
+buffer kept its data       True   want True  (38 transitions, nothing dropped)
+
+PASS

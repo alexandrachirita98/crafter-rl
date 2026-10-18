@@ -1,0 +1,10 @@
+$ python stage_06_qrdqn/train.py --test-loss
+tau    0.062  0.188  0.312  0.438  0.562  0.688  0.812  0.938
+fitted  0.79   2.64   3.70   4.57   5.38   6.25   7.35   9.20
+true    0.38   2.33   3.53   4.52   5.46   6.46   7.65   9.59
+
+max |fitted - true| 0.41   want < 0.6
+mean of fitted      4.98   want ~5.00 (true distribution mean)
+monotone increasing True   want True
+
+PASS

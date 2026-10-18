@@ -1,0 +1,1 @@
+python stage_09_ez_greedy/train.py --total-steps 200000 --seed 2 --logdir logdir --eps-decay-steps 50000

@@ -1,0 +1,9 @@
+$ python stage_07_munchausen/train.py --test-munchausen
+bonus broadcast over 51 quantiles  True   want True
+bonus within [-1.0, 0]                 True   want True
+rows sitting on the clip              12/16  want > 0
+
+soft value  1.894   max-Q 1.891   bound 1.976
+soft <= max_a Q + tau*log(17) for every row  True   want True
+
+PASS
