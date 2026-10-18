@@ -1,0 +1,6 @@
+Setting all rngs to seed=1
+stage stage_11_c1_achievement_aux  seed 1  steps 200,000  device cuda
+buffer 100,000 transitions = 2.5 GB host RAM
+logging to /tmp/crafter-277878/crafter_reward-stage_11_c1_achievement_aux/1/stats.jsonl
+[  60][   10000], R/ep=  1.00, eps=1.00, loss=     nan, meanQ=    nan, aux=   nan, acc=nan% (majority nan%),   121 fps
+[ 120][   20000], R/ep=  1.60, eps=1.00, loss=     nan, meanQ=    nan, aux=   nan, acc=nan% (majority nan%),   121 fps

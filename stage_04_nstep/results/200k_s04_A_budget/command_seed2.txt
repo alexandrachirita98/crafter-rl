@@ -1,0 +1,1 @@
+python stage_04_nstep/train.py --total-steps 200000 --seed 2 --logdir logdir --eps-decay-steps 50000 --warmup-steps 5000 --buffer-size 50000
