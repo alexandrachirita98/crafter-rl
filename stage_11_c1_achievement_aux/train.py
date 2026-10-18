@@ -206,17 +206,17 @@ class AuxDrQResets(DrQResets):
 
     # -- storing: route stage 04's emitted transitions through the labeller --
 
-    def learn(self, state, action, reward, state_, mask, counts=None):
+    def learn(self, i, state, action, reward, state_, mask, counts=None):
         """train_aux() passes the achievement counts for this step."""
         self._pending_counts = counts
         if self._step_cnt >= self._warmup_steps and len(self._buffer) == 0:
             # Stage 02 sizes warmup against the batch, but the n-step window
             # and the lookahead both hold transitions back, so a short run can
             # end warmup with nothing stored and sample unwritten rows.
-            self._store(state, action, reward, state_, mask)
+            self._store(i, state, action, reward, state_, mask)
             self._step_cnt += 1
             return
-        super().learn(state, action, reward, state_, mask)
+        super().learn(i, state, action, reward, state_, mask)
 
     def _buffer_push(self, transition):
         """Hold stage 04's six-tuple until its label is known, then push."""
@@ -226,18 +226,19 @@ class AuxDrQResets(DrQResets):
         for payload, label in self._labeller.push(transition, counts):
             self._buffer.push((*payload, label))
 
-    def _emit(self):
+    def _emit(self, i):
         """Stage 04's _emit, with the push redirected through the labeller."""
+        window = self._windows[i]
         G = 0.0
-        for k, (_, _, r, _, _) in enumerate(self._window):
+        for k, (_, _, r, _, _) in enumerate(window):
             G += self._gamma ** k * r
-        s0, a0 = self._window[0][0], self._window[0][1]
-        _, _, _, s_n, mask_n = self._window[-1]
-        self._buffer_push((s0, a0, G, s_n, mask_n, len(self._window)))
-        self._window.popleft()
+        s0, a0 = window[0][0], window[0][1]
+        _, _, _, s_n, mask_n = window[-1]
+        self._buffer_push((s0, a0, G, s_n, mask_n, len(window)))
+        window.popleft()
 
-    def end_episode(self):
-        super().end_episode()                   # flushes the n-step window
+    def end_episode(self, i):
+        super().end_episode(i)                   # flushes the n-step window
         # Labels for the tail are computed on a shorter future, which is
         # correct: the episode genuinely ends there.
         for payload, label in self._labeller.flush():
@@ -288,15 +289,16 @@ def train_aux(agent, env, step_num=100_000, log_every=10_000):
     start = time.time()
 
     for step in range(step_num):
-        action = agent.step(state)
+        action = agent.step(state[None])[0]
         state_, reward, done, info = env.step(action)
-        agent.learn(state, action, reward, state_, bootstrap_mask(done, info),
+        agent.learn(0, state, action, reward, state_,
+                    bootstrap_mask(done, info),
                     counts=counts_vector(info))
         state = state_
         ep_rewards[N] += reward
 
         if done:
-            agent.end_episode()
+            agent.end_episode(0)
             state, done = env.reset(), False
             ep_rewards.append(0.0)
             N += 1
@@ -422,7 +424,7 @@ def test_aux(horizon=3):
             counts = counts.copy(); counts[t % N_ACH] += 1
         s = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
         s_ = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
-        agent.learn(s, t % N_ACTIONS, float(t % 2), s_, 1.0, counts=counts)
+        agent.learn(0, s, t % N_ACTIONS, float(t % 2), s_, 1.0, counts=counts)
 
     shape_ok = net.aux_logits(
         torch.randint(0, 256, (batch, 3, 64, 64), dtype=torch.uint8,
@@ -449,6 +451,17 @@ def test_aux(horizon=3):
 def main(argv=None):
     if '--test-aux' in (argv if argv is not None else sys.argv[1:]):
         return test_aux()
+    if '--num-envs' in (argv if argv is not None else sys.argv[1:]):
+        # These stages replace stage 02's loop with a single-env one, so a
+        # parallel request must fail loudly rather than be ignored.
+        import argparse as _ap
+        _p = _ap.ArgumentParser(add_help=False)
+        _p.add_argument('--num-envs', type=int, default=1)
+        if _p.parse_known_args(argv if argv is not None else sys.argv[1:])[0].num_envs > 1:
+            raise SystemExit(
+                f'{STAGE_ID} runs a single-env loop (its labeller needs one '
+                'continuous trajectory); --num-envs > 1 is not supported')
+
     import stage_02_dqn.train as s02
     original = s02.train
     s02.train = train_aux               # the loop must pass achievements down

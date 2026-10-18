@@ -34,8 +34,8 @@ import torch.optim as O
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from common.env import N_ACTIONS, OBS_SHAPE, bootstrap_mask, make_env
-from common.metrics import ACHIEVEMENTS, score_run
+from common.env import N_ACTIONS, OBS_SHAPE, VecEnv, bootstrap_mask
+from common.metrics import ACHIEVEMENTS, score_pooled
 
 STAGE_ID = 'stage_02_dqn'
 
@@ -168,6 +168,7 @@ class DQN:
         update_steps=4,
         update_target_steps=10,
         warmup_steps=100,
+        num_envs=1,
     ):
         self._estimator = estimator
         self._target_estimator = deepcopy(estimator)
@@ -179,6 +180,7 @@ class DQN:
         self._update_steps = update_steps
         self._update_target_steps = update_target_steps
         self._warmup_steps = warmup_steps
+        self._num_envs = num_envs
         self._step_cnt = 0
         # for the log line; NaN until the first gradient step
         self.loss = float('nan')
@@ -187,21 +189,36 @@ class DQN:
         assert warmup_steps > self._buffer._batch_size, (
             'You should have at least a batch in the ER.')
 
-    def step(self, state):
-        """Epsilon-greedy. `state` is a raw uint8 (64,64,3) numpy frame."""
+    def step(self, states):
+        """Epsilon-greedy over a batch. (N,64,64,3) uint8 -> (N,) actions.
+
+        One forward pass for all N envs, not N passes: the batching is where
+        the throughput comes from. The coin flip is per env -- a single shared
+        flip would make every env explore or exploit in lockstep, which throws
+        away the decorrelation that running them in parallel buys.
+
+        The schedule advances once per call, not once per env, so epsilon
+        tracks calls to step(). main() divides --eps-decay-steps by num_envs
+        to keep it on the env-step clock.
+        """
+        n = len(states)
         if self._step_cnt < self._warmup_steps:
-            return torch.randint(self._action_num, (1,)).item()
+            return np.random.randint(self._action_num, size=n)
 
         self.eps = next(self._epsilon)
-        if self.eps < torch.rand(1).item():
+        greedy = np.random.rand(n) >= self.eps
+        actions = np.random.randint(self._action_num, size=n)
+        if greedy.any():
             with torch.no_grad():
-                qvals = self._estimator(_to_tensor(state))
-                return qvals.argmax().item()
-        else:
-            return torch.randint(self._action_num, (1,)).item()
+                qvals = self._estimator(_to_tensor(states[greedy]))
+                actions[greedy] = qvals.argmax(1).cpu().numpy()
+        return actions
 
-    def learn(self, state, action, reward, state_, mask):
-        self._store(state, action, reward, state_, mask)
+    def learn(self, i, state, action, reward, state_, mask):
+        """`i` is which env the transition came from. Stages that keep
+        per-trajectory state (04's n-step window, 09's repeat walk) index by
+        it; the replay buffer itself does not care."""
+        self._store(i, state, action, reward, state_, mask)
 
         if self._step_cnt < self._warmup_steps:
             self._step_cnt += 1
@@ -218,12 +235,14 @@ class DQN:
 
         self._step_cnt += 1
 
-    def _store(self, state, action, reward, state_, mask):
+    def _store(self, i, state, action, reward, state_, mask):
         """One-step: push as-is. Stage 04 keeps an n-step window here."""
+        del i
         self._buffer.push((state, action, reward, state_, mask))
 
-    def end_episode(self):
-        """train() calls this on every done. One-step has nothing to do."""
+    def end_episode(self, i):
+        """train() calls this when env `i` finishes. One-step does nothing."""
+        del i
 
     def _update(self, states, actions, rewards, states_, mask):
         """Stage 03 overrides this method and nothing else."""
@@ -252,51 +271,57 @@ class DQN:
 
 
 def train(agent, env, step_num=100_000, log_every=10_000):
-    """The lab's loop on Crafter's 4-tuple API.
+    """The lab's loop, over a VecEnv on Crafter's 4-tuple API.
+
+    step_num is ENV STEPS, the benchmark budget, not loop iterations: with
+    num_envs envs each iteration consumes num_envs of them, so the range
+    strides by num_envs. Writing range(step_num) here would quietly run
+    num_envs times the budget and make the number incomparable to every run
+    already in */results/.
+
+    VecEnv auto-resets, so a done env's next observation arrives in the same
+    step() return. Do not call env.reset() on done -- the mask from
+    bootstrap_mask is what stops the learner bootstrapping across the seam.
 
     Logs at a fixed interval rather than per episode, since Crafter episodes
     run to thousands of steps and stats.jsonl is the real record.
     """
-    stats = {'step_idx': [0], 'ep_rewards': [0.0], 'ep_steps': [0.0]}
-    N = 0
-    state, done = env.reset(), False
+    num_envs = env.num_envs
+    ep_reward = np.zeros(num_envs, dtype=np.float64)
+    recent = deque(maxlen=10)
+    states = env.reset()
+    episodes = 0
     start = time.time()
 
-    for step in range(step_num):
+    for step in range(0, step_num, num_envs):
 
-        action = agent.step(state)
+        actions = agent.step(states)
 
-        state_, reward, done, info = env.step(action)
+        states_, rewards, dones, infos = env.step(actions)
 
-        agent.learn(state, action, reward, state_,
-                    bootstrap_mask(done, info))
+        for i in range(num_envs):
+            agent.learn(i, states[i], actions[i], rewards[i], states_[i],
+                        bootstrap_mask(dones[i], infos[i]))
+            ep_reward[i] += rewards[i]
+            if dones[i]:
+                agent.end_episode(i)
+                recent.append(ep_reward[i])
+                ep_reward[i] = 0.0
+                episodes += 1
 
-        state = state_
+        states = states_
 
-        # stats
-        stats['ep_rewards'][N] += reward
-        stats['ep_steps'][N] += 1
-
-        if done:
-            agent.end_episode()
-            state, done = env.reset(), False
-
-            stats['ep_rewards'].append(0.0)
-            stats['ep_steps'].append(0.0)
-            stats['step_idx'].append(step)
-            N += 1
-
-        if (step + 1) % log_every == 0:
-            fps = (step + 1) / (time.time() - start)
-            recent = stats['ep_rewards'][-11:-1] or [float('nan')]
+        done_steps = step + num_envs
+        if done_steps % log_every < num_envs:
+            fps = done_steps / (time.time() - start)
+            seen = list(recent) or [float('nan')]
             print('[{0:4d}][{1:8d}], R/ep={2:6.2f}, eps={3:4.2f}, '
                   'loss={4:8.4f}, meanQ={5:7.3f}, {6:5.0f} fps'.format(
-                      N, step + 1,
-                      float(np.mean(recent)), agent.eps,
+                      episodes, done_steps,
+                      float(np.mean(seen)), agent.eps,
                       agent.loss, agent.mean_q, fps), flush=True)
 
-    stats['agent'] = [agent.__class__.__name__ for _ in range(N + 1)]
-    return stats, N, time.time() - start
+    return None, episodes, time.time() - start
 
 
 # ------------------------------------------------------------------ 6. main
@@ -310,6 +335,10 @@ def parse_args(argv=None, extra_args=None):
     p.add_argument('--total-steps', type=int, default=1_000_000,
                    help='environment steps; the benchmark budget is 1M')
     p.add_argument('--seed', type=int, default=1)
+    p.add_argument('--num-envs', type=int, default=1,
+                   help='parallel Crafter envs sharing one replay buffer and '
+                        'one net. 1 reproduces stages 02-10 exactly as run. '
+                        '--total-steps stays the total across all envs')
     p.add_argument('--logdir', type=str, default='logdir')
 
     p.add_argument('--buffer-size', type=int, default=100_000,
@@ -350,10 +379,20 @@ def parse_args(argv=None, extra_args=None):
 
 
 def report(logdir, episodes):
-    stats = logdir / 'stats.jsonl'
-    if not (stats.exists() and episodes):
+    """Score the run. With num_envs > 1 the Recorders write one stats.jsonl
+    per shard, so pool every episode and score the pool ONCE.
+
+    Averaging per-shard scores is a different (and wrong) number: the score is
+    a geometric mean over achievement rates, and each shard holds only
+    1/num_envs of the episodes, where one lucky unlock reads as a far higher
+    rate than it should. Pool first, score after.
+    """
+    shards = sorted(logdir.glob('shard*/stats.jsonl'))
+    paths = shards or [logdir / 'stats.jsonl']
+    paths = [q for q in paths if q.exists()]
+    if not (paths and episodes):
         return
-    score, percents, n = score_run(stats)
+    score, percents, n = score_pooled(paths)
     print(f'score over {n} episodes: {score:.2f}%   (random baseline: ~1.6%)')
     print('\nper-achievement success rate, non-zero only:')
     for name, pct in sorted(zip(ACHIEVEMENTS, percents),
@@ -382,30 +421,39 @@ def main(argv=None, agent_cls=DQN, stage_id=STAGE_ID, extra_args=None,
     logdir.mkdir(parents=True, exist_ok=True)
 
     reset_rng(args.seed)
-    env = make_env(args.seed, logdir)
+    env = VecEnv(args.num_envs, logdir=logdir, seed=args.seed)
 
     capacity = min(args.buffer_size, args.total_steps)
     frame_bytes = int(np.prod(OBS_SHAPE))
     print(f'stage {stage_id}  seed {args.seed}  '
-          f'steps {args.total_steps:,}  device {DEVICE}')
+          f'steps {args.total_steps:,}  envs {args.num_envs}  '
+          f'device {DEVICE}')
     # 2 frames per transition: the deque stores state and state_ separately.
     # Priced before allocating, since allocating to find out is the crash.
     print(f'buffer {capacity:,} transitions = '
           f'{2 * capacity * frame_bytes / 1e9:.1f} GB host RAM')
-    print(f'logging to {logdir}/stats.jsonl', flush=True)
+    shard_note = ('shard*/stats.jsonl' if args.num_envs > 1
+                  else 'stats.jsonl')
+    print(f'logging to {logdir}/{shard_note}', flush=True)
 
     net, buffer, extra = build(args, capacity)
     agent = agent_cls(
         net,
         buffer,
         O.Adam(net.parameters(), lr=args.lr, eps=args.adam_eps),
+        # The schedule advances once per agent.step() call, i.e. once per
+        # num_envs env steps, so the decay length is in calls, not env steps.
+        # Without this division a 16-env run would still be at eps ~0.95 when
+        # the budget runs out and would score at the random baseline.
         get_epsilon_schedule(start=args.eps_start, end=args.eps_end,
-                             steps=args.eps_decay_steps),
+                             steps=max(1, args.eps_decay_steps
+                                       // args.num_envs)),
         N_ACTIONS,
         gamma=args.gamma,
         warmup_steps=args.warmup_steps,
         update_steps=args.update_steps,
         update_target_steps=args.update_target_steps,
+        num_envs=args.num_envs,
         **extra,
     )
 

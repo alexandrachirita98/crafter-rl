@@ -20,6 +20,7 @@ Run:
 import pathlib
 import sys
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -78,15 +79,20 @@ class QRDQN(NStepDoubleDQN):
         """The mean over quantiles IS the Q-value. (B, A)."""
         return self._estimator(states).mean(2)
 
-    def step(self, state):
-        # stage 02's step, with argmax over self._q instead of the raw output
+    def step(self, states):
+        # stage 02's batched step, with argmax over self._q (the mean over
+        # quantiles) instead of the raw output
+        n = len(states)
         if self._step_cnt < self._warmup_steps:
-            return torch.randint(self._action_num, (1,)).item()
+            return np.random.randint(self._action_num, size=n)
         self.eps = next(self._epsilon)
-        if self.eps < torch.rand(1).item():
+        greedy = np.random.rand(n) >= self.eps
+        actions = np.random.randint(self._action_num, size=n)
+        if greedy.any():
             with torch.no_grad():
-                return self._q(_to_tensor(state)).argmax().item()
-        return torch.randint(self._action_num, (1,)).item()
+                q = self._q(_to_tensor(states[greedy]))
+                actions[greedy] = q.argmax(1).cpu().numpy()
+        return actions
 
     def _update(self, states, actions, rewards, states_, mask, n):
         pred, per_sample = self._per_sample(states, actions, rewards,

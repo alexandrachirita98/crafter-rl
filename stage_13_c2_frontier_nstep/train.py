@@ -147,16 +147,17 @@ def train_frontier(agent, env, step_num=100_000, log_every=10_000):
     start = time.time()
 
     for step in range(step_num):
-        action = agent.step(state)
+        action = agent.step(state[None])[0]
         state_, reward, done, info = env.step(action)
-        agent.learn(state, action, reward, state_, bootstrap_mask(done, info),
+        agent.learn(0, state, action, reward, state_,
+                    bootstrap_mask(done, info),
                     counts=counts_vector(info))
         state = state_
         ep_rewards[N] += reward
 
         if done:
             achievements = info['achievements']
-            agent.end_episode()
+            agent.end_episode(0)
             agent.on_episode_end(achievements)
             flog.write(json.dumps({
                 'step': step + 1, 'episode': N,
@@ -281,6 +282,17 @@ def test_frontier(window=10, threshold=0.20):
 def main(argv=None):
     if '--test-frontier' in (argv if argv is not None else sys.argv[1:]):
         return test_frontier()
+    if '--num-envs' in (argv if argv is not None else sys.argv[1:]):
+        # These stages replace stage 02's loop with a single-env one, so a
+        # parallel request must fail loudly rather than be ignored.
+        import argparse as _ap
+        _p = _ap.ArgumentParser(add_help=False)
+        _p.add_argument('--num-envs', type=int, default=1)
+        if _p.parse_known_args(argv if argv is not None else sys.argv[1:])[0].num_envs > 1:
+            raise SystemExit(
+                f'{STAGE_ID} runs a single-env loop (its labeller needs one '
+                'continuous trajectory); --num-envs > 1 is not supported')
+
     import stage_02_dqn.train as s02
     original = s02.train
     s02.train = train_frontier

@@ -38,31 +38,49 @@ class EzGreedy(PERQRDQN):
     def __init__(self, *args, ez_mu=2.0, ez_max_repeat=100, **kwargs):
         super().__init__(*args, **kwargs)
         self._mu, self._cap = ez_mu, ez_max_repeat
-        self._repeat_action, self._repeat_left = 0, 0
+        # ONE WALK PER ENV. A repeat is "hold this action for the next k steps
+        # in THIS world". Shared across num_envs envs, a walk drawn for env 0
+        # would be consumed by the other envs' steps instead, so no env ever
+        # holds an action for its own k steps -- which is the whole mechanism.
+        self._repeat_action = np.zeros(self._num_envs, dtype=np.int64)
+        self._repeat_left = np.zeros(self._num_envs, dtype=np.int64)
 
-    def step(self, state):
+    def step(self, states):
+        n = len(states)
         if self._step_cnt < self._warmup_steps:
-            return torch.randint(self._action_num, (1,)).item()
-        # Advance the schedule every step, repeating or not, so epsilon decays
-        # on the same clock as stages 02-08.
+            return np.random.randint(self._action_num, size=n)
+        # Advance the schedule once per call, repeating or not, so epsilon
+        # decays on the same clock as stages 02-08.
         self.eps = next(self._epsilon)
-        if self._repeat_left > 0:
-            self._repeat_left -= 1
-            return self._repeat_action
-        if torch.rand(1).item() < self.eps:
-            self._repeat_action = torch.randint(self._action_num, (1,)).item()
-            # The cap is not optional: over 200k draws zipf(2.0) has a median
-            # of 1 and a p99 near 60, but a max above 300,000 -- one draw would
-            # hold an action for 30 episodes. Capped at 100 the mean is 3.8 and
-            # p99 stays near 60, so the tail survives.
-            self._repeat_left = min(int(np.random.zipf(self._mu)), self._cap) - 1
-            return self._repeat_action
-        with torch.no_grad():
-            return self._q(_to_tensor(state)).argmax().item()
 
-    def end_episode(self):
-        super().end_episode()               # stage 04 flushes its window here
-        self._repeat_left = 0               # a new world; drop the walk
+        actions = np.zeros(n, dtype=np.int64)
+        need_q = np.zeros(n, dtype=bool)
+        for i in range(n):
+            if self._repeat_left[i] > 0:
+                self._repeat_left[i] -= 1
+                actions[i] = self._repeat_action[i]
+            elif np.random.rand() < self.eps:
+                a = np.random.randint(self._action_num)
+                # The cap is not optional: over 200k draws zipf(2.0) has a
+                # median of 1 and a p99 near 60, but a max above 300,000 --
+                # one draw would hold an action for 30 episodes. Capped at 100
+                # the mean is 3.8 and p99 stays near 60, so the tail survives.
+                self._repeat_action[i] = a
+                self._repeat_left[i] = min(int(np.random.zipf(self._mu)),
+                                           self._cap) - 1
+                actions[i] = a
+            else:
+                need_q[i] = True
+        # One batched forward pass for whichever envs want a greedy action.
+        if need_q.any():
+            with torch.no_grad():
+                q = self._q(_to_tensor(states[need_q]))
+                actions[need_q] = q.argmax(1).cpu().numpy()
+        return actions
+
+    def end_episode(self, i):
+        super().end_episode(i)              # stage 04 flushes its window here
+        self._repeat_left[i] = 0            # a new world; drop the walk
 
 
 def extra_args(p):

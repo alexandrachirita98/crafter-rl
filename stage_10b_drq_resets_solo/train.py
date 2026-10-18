@@ -136,7 +136,7 @@ def test_solo(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
         before = len(fired)
         s = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
         s_ = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
-        agent.learn(s, t % N_ACTIONS, float(t % 2), s_, 1.0)
+        agent.learn(0, s, t % N_ACTIONS, float(t % 2), s_, 1.0)
         if len(fired) > before and not head_changed:      # the call that reset
             head_changed = not torch.equal(pre, net[-1].weight.detach())
             synced = torch.equal(net[-1].weight.detach(),

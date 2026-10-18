@@ -131,7 +131,7 @@ def test_drq(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
         pre_head = net.adv[-1].weight.detach().clone()
         s = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
         s_ = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
-        agent.learn(s, t % N_ACTIONS, float(t % 2), s_, 1.0)
+        agent.learn(0, s, t % N_ACTIONS, float(t % 2), s_, 1.0)
         if agent._step_cnt == reset_every + 1:        # the step that reset
             head_changed = not torch.equal(pre_head,
                                            net.adv[-1].weight.detach())

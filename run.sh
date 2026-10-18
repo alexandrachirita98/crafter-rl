@@ -17,9 +17,11 @@
 #     ./run.sh 02 --smoke                            # 2k-step shakedown
 #     ./run.sh 08 --steps 1000000 --name final       # -> results/final/
 #     ./run.sh 09 -- --ez-mu 4.0                     # stage-specific flag
+#     ./run.sh 03 --envs 16 --steps 200000 --name 200k_v16   # parallel envs
 #
 # Options:
-#     --steps N      env steps              (default 200000)
+#     --steps N      env steps, TOTAL across envs   (default 200000)
+#     --envs N       parallel envs          (default 1, reproduces 02-10)
 #     --seed N       single seed            (default 1)
 #     --seeds a,b    several seeds, run one after another
 #     --name DIR     results subdir name    (default live_run)
@@ -70,6 +72,7 @@ resolve_stage() {
 # ------------------------------------------------------------------ args
 
 STEPS=200000
+ENVS=1
 SEEDS=""
 SEED=1
 NAME="live_run"
@@ -91,6 +94,7 @@ STAGE="$(resolve_stage "$1")"; shift
 while [ $# -gt 0 ]; do
   case "$1" in
     --steps)       STEPS="$2"; shift 2;;
+    --envs)        ENVS="$2"; shift 2;;
     --seed)        SEED="$2"; shift 2;;
     --seeds)       SEEDS="$2"; shift 2;;
     --name)        NAME="$2"; shift 2;;
@@ -131,6 +135,7 @@ RESULTS="$REPO/$STAGE/results/$NAME"
 
 echo "stage    $STAGE"
 echo "steps    $STEPS"
+echo "envs     $ENVS"
 echo "seeds    $SEEDS"
 echo "results  $STAGE/results/$NAME"
 echo "logdir   $LOGROOT"
@@ -160,10 +165,12 @@ fi
 
 for s in ${SEEDS//,/ }; do
   LOG="$RESULTS/train_seed$s.log"
-  STATS_SRC="$LOGROOT/crafter_reward-$STAGE/$s/stats.jsonl"
+  RUNDIR="$LOGROOT/crafter_reward-$STAGE/$s"
+  STATS_SRC="$RUNDIR/stats.jsonl"
 
   CMD=(python "$STAGE/train.py"
        --total-steps "$STEPS"
+       --num-envs "$ENVS"
        --seed "$s"
        --logdir "$LOGROOT")
   [ "${#SMOKE_ARGS[@]}" -gt 0 ] && CMD+=("${SMOKE_ARGS[@]}") || true
@@ -189,17 +196,32 @@ for s in ${SEEDS//,/ }; do
     exit "$rc"
   fi
 
-  # Copy the stats the Recorder wrote into the results dir.
-  if [ -f "$STATS_SRC" ]; then
+  # Copy the stats the Recorder wrote into the results dir. With --envs > 1
+  # there is one stats.jsonl per shard; concatenate them so the artifact
+  # layout stays stats_seed<N>.jsonl either way. Concatenating is correct for
+  # scoring: the score is computed over the POOLED episodes, and every line is
+  # one finished episode, so order does not matter. The per-shard files are
+  # kept alongside for anyone who wants per-env curves.
+  mapfile -t SHARDS < <(ls "$RUNDIR"/shard*/stats.jsonl 2>/dev/null || true)
+  if [ "${#SHARDS[@]}" -gt 0 ]; then
+    cat "${SHARDS[@]}" > "$RESULTS/stats_seed$s.jsonl"
+    echo "wrote $STAGE/results/$NAME/stats_seed$s.jsonl"
+    echo "  pooled from ${#SHARDS[@]} shards"
+    mkdir -p "$RESULTS/shards_seed$s"
+    for sh in "${SHARDS[@]}"; do
+      n="$(basename "$(dirname "$sh")")"
+      cp "$sh" "$RESULTS/shards_seed$s/$n.jsonl"
+    done
+  elif [ -f "$STATS_SRC" ]; then
     cp "$STATS_SRC" "$RESULTS/stats_seed$s.jsonl"
     echo "wrote $STAGE/results/$NAME/stats_seed$s.jsonl"
   else
-    echo "WARNING: no stats.jsonl at $STATS_SRC" >&2
+    echo "WARNING: no stats.jsonl under $RUNDIR" >&2
   fi
 
   # Mechanical summary: score, fps, per-achievement rates.
   if [ -f "$RESULTS/stats_seed$s.jsonl" ]; then
-    STAGE="$STAGE" SEED="$s" STEPS="$STEPS" NAME="$NAME" \
+    STAGE="$STAGE" SEED="$s" STEPS="$STEPS" NAME="$NAME" ENVS="$ENVS" \
     LOG="$LOG" STATS="$RESULTS/stats_seed$s.jsonl" \
     OUT="$RESULTS/summary_seed$s.json" \
     python - <<'PY'
@@ -239,6 +261,7 @@ summary = {
     'run_kind': os.environ['NAME'],
     'command': cmd,
     'env_steps': int(os.environ['STEPS']),
+    'num_envs': int(os.environ.get('ENVS', 1)),
     'seed': int(os.environ['SEED']),
     'device': device,
     'final_epsilon': final_eps,

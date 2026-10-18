@@ -144,7 +144,7 @@ def test_per(steps=40, warmup=20, capacity=64, batch=8):
     for t in range(steps):
         s = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
         s_ = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
-        agent.learn(s, t % N_ACTIONS, float(t % 2), s_, 1.0)
+        agent.learn(0, s, t % N_ACTIONS, float(t % 2), s_, 1.0)
 
     tree = buffer._tree
     leaves = tree.nodes[tree.size:]

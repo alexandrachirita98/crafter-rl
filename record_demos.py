@@ -150,12 +150,14 @@ class ScriptedExpert:
         self.shelter_target = None
         self.shelter_walk = 0
         self.placed_stone = set()       # tiles we walled -- never mine these back
+        self._furnace_pending = False   # set each step; see _saving_for_furnace
 
     def act(self, info):
         sem = info['semantic']
         pos = tuple(int(v) for v in info['player_pos'])
         inv = info['inventory']
         ach = info['achievements']
+        self._furnace_pending = self._saving_for_furnace(inv, ach)
 
         # Anti-stall: if we have not moved in a while, take a random walk so a
         # bad BFS target cannot freeze the episode.
@@ -225,7 +227,7 @@ class ScriptedExpert:
         # wall is the best answer because it blocks pathing outright.
         if adjacent and (not healthy or not armed):
             if inv['stone'] >= 1:
-                act = self._seal_in(sem, pos)
+                act = self._seal_in(sem, pos, inv, ach)
                 if act is not None:
                     return act
             return self._flee(sem, pos, {OBJ['zombie'], OBJ['skeleton']})
@@ -321,7 +323,7 @@ class ScriptedExpert:
                 return A['sleep']
             if openings == 1:
                 if inv['stone'] >= 1:
-                    act = self._seal_in(sem, pos)
+                    act = self._seal_in(sem, pos, inv, ach)
                     if act is not None:
                         return act          # we happened to face the exit
                 if not hunting:
@@ -331,7 +333,7 @@ class ScriptedExpert:
             # that is the one shelter always available once we hold a pickaxe.
             # Natural dead-ends in open grass are too rare to rely on: seeking
             # them gave 1 sleep in 20 seeds.
-            act = self._dig_in(sem, pos, inv)
+            act = self._dig_in(sem, pos, inv, ach)
             if act is not None:
                 return act
             if not hunting and self._open_neighbours(sem, pos) <= 1:
@@ -496,7 +498,24 @@ class ScriptedExpert:
         """
         if inv['wood_pickaxe'] < 1:
             return inv['stone']
+        if self._furnace_pending:
+            return inv['stone']
         return max(0, inv['stone'] - SHELTER_STONE)
+
+    def _saving_for_furnace(self, inv, ach):
+        """True while stone must be banked for a furnace rather than spent.
+
+        The furnace is the last gate on make_iron_pickaxe and costs 4 stone.
+        Without this the shelter wall spent every stone the expert mined --
+        10 mines against 10 place_stone over seeds 7000-7014, net zero, so
+        the stock never reached 4 and place_furnace stayed at 0.
+        """
+        # Start banking as soon as mining is possible, not when coal and iron
+        # are already in hand: 40 of 56 shelter walls went up before coal was
+        # collected (seeds 7000-7014), so waiting until then saves nothing.
+        return (inv['stone_pickaxe'] >= 1
+                and not ach['place_furnace']
+                and inv['stone'] < FURNACE_STONE)
 
     def _open_neighbours(self, sem, pos):
         n = 0
@@ -512,7 +531,7 @@ class ScriptedExpert:
         """Sealed in: nothing can walk to us, so sleeping is safe."""
         return self._open_neighbours(sem, pos) == 0
 
-    def _seal_in(self, sem, pos):
+    def _seal_in(self, sem, pos, inv=None, ach=None):
         """Wall off one open neighbour, turning to face it first.
 
         In a one-exit pocket the facing tile is usually SOLID (we dug downward,
@@ -535,8 +554,13 @@ class ScriptedExpert:
         is open. Otherwise step to a neighbour with fewer exits, which is
         progress rather than oscillation.
         """
+        # Don't wall with stone the furnace is waiting on -- digging into
+        # rock shelters just as well and costs nothing.
+        hold = (inv is not None and ach is not None
+                and self._saving_for_furnace(inv, ach))
         facing_tile = (pos[0] + self.facing[0], pos[1] + self.facing[1])
-        if (0 <= facing_tile[0] < sem.shape[0]
+        if (not hold
+                and 0 <= facing_tile[0] < sem.shape[0]
                 and 0 <= facing_tile[1] < sem.shape[1]
                 and sem[facing_tile] in WALKABLE):
             self.placed_stone.add(facing_tile)
@@ -564,7 +588,7 @@ class ScriptedExpert:
         self.facing = best_delta
         return best_move
 
-    def _dig_in(self, sem, pos, inv):
+    def _dig_in(self, sem, pos, inv, ach=None):
         """Carve a pocket in a stone face and sleep at the far end.
 
         Crafter will not let you seal a box around yourself: there is no turn
@@ -582,7 +606,7 @@ class ScriptedExpert:
             return None
         # Already inside a pocket we dug? Seal the way we came in.
         if self._open_neighbours(sem, pos) == 1 and inv['stone'] >= 1:
-            return self._seal_in(sem, pos)
+            return self._seal_in(sem, pos, inv, ach)
 
         # Prefer a stone tile whose far side is also solid, so the hole we open
         # really has one entrance rather than becoming a corridor.

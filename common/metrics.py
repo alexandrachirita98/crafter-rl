@@ -104,3 +104,40 @@ def score_run(path, budget=None):
         episodes = [ep for ep, k in zip(episodes, keep) if k]
     percents = success_percents(episodes)
     return float(compute_scores(percents)), percents, len(episodes)
+
+
+def score_pooled(paths, budget=None):
+    """Score several shards of ONE run as a single pool of episodes.
+
+    A num_envs > 1 run writes <logdir>/shardN/stats.jsonl per env. Those
+    shards are one experiment, not N experiments, so the episodes are pooled
+    and scored once.
+
+    Do not average per-shard scores instead -- that is a different number,
+    and which way it is wrong depends on the episode count per shard. The
+    score is a geometric mean over 22 achievement rates, so it is dominated by
+    the rates near zero: a shard that never unlocked an achievement scores it
+    at 0% and drags the whole mean down, while a shard that got one lucky
+    unlock in few episodes reads it as a much higher rate than the run earned.
+    Measured on an 8-env smoke run (2-3 episodes per shard), the per-shard
+    mean came out at 1.26% against a pooled 1.89% -- the missing-achievement
+    effect dominating. With more episodes per shard the bias runs the other
+    way. Either way only the pooled number is the run's score.
+
+    budget: as score_run, but applied per shard -- each env gets budget //
+    len(paths) steps, since that is its share of the total.
+    """
+    paths = [pathlib.Path(p) for p in paths]
+    per_shard = budget // len(paths) if budget is not None else None
+    episodes = []
+    for path in paths:
+        if per_shard is None:
+            episodes.extend(read_stats(path))
+            continue
+        shard = read_stats(path)
+        lengths = [json.loads(line)['length']
+                   for line in path.read_text().splitlines() if line.strip()]
+        keep = np.cumsum(lengths) <= per_shard
+        episodes.extend(ep for ep, k in zip(shard, keep) if k)
+    percents = success_percents(episodes)
+    return float(compute_scores(percents)), percents, len(episodes)

@@ -13,6 +13,7 @@ the only thing that separates them is info['discount']. See THE EPISODE-END TRAP
 below.
 """
 
+import numpy as np
 import crafter
 
 # Verified against crafter/env.py.
@@ -71,3 +72,53 @@ def bootstrap_mask(done, info):
     """
     del done
     return float(info['discount'])
+
+
+class VecEnv:
+    """Synchronous vector of Crafter envs with auto-reset.
+
+    Moved here from baseline_agent/train.py so the DQN stages and the baseline
+    share one implementation. Two differences from that copy: make_env is
+    called by keyword (common.env.make_env takes (seed, logdir), the
+    baseline_agent one took (outdir, seed) -- positionally these are swapped,
+    which sets the seed to a path string), and num_envs=1 is a supported case
+    so stages 02-10 keep their single-env behaviour by default.
+
+    Every env gets its OWN Recorder writing to <logdir>/shardN/stats.jsonl.
+    Two reasons this layout and not a single shared file: appending from 16
+    envs to one handle interleaves partial lines, and analysis/read_metrics.py
+    globs '**/stats.jsonl' treating each file as one run -- which is also how
+    the random-agent runs already in logdir/ are laid out.
+
+    Crafter's step() returns the old-gym 4-tuple, so this does too.
+    """
+
+    def __init__(self, num_envs, logdir=None, seed=0, length=EPISODE_CAP):
+        self.envs = [
+            make_env(seed=seed + i,
+                     logdir=f'{logdir}/shard{i}' if logdir else None,
+                     length=length)
+            for i in range(num_envs)
+        ]
+        self.num_envs = num_envs
+        self.num_actions = self.envs[0].action_space.n
+
+    def reset(self):
+        return np.stack([env.reset() for env in self.envs])
+
+    def step(self, actions):
+        obs, rewards, dones, infos = [], [], [], []
+        for env, action in zip(self.envs, actions):
+            ob, reward, done, info = env.step(int(action))
+            if done:
+                # Auto-reset. The observation returned is the first of the next
+                # episode; `done` tells the learner not to bootstrap across the
+                # seam, via bootstrap_mask(done, info) on the info we return
+                # here -- which is the dying step's info, not the new one's.
+                ob = env.reset()
+            obs.append(ob)
+            rewards.append(reward)
+            dones.append(done)
+            infos.append(info)
+        return (np.stack(obs), np.array(rewards, np.float32),
+                np.array(dones), infos)

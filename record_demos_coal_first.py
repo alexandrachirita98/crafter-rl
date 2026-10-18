@@ -67,20 +67,19 @@ class CoalFirstExpert(ScriptedExpert):
             if act is not None:
                 return act
 
-        # 7. furnace, then iron tools. place_furnace needs only stone, but
-        # the baseline hides it behind make_stone_sword (13/40), so it never
-        # ran. Put it here, where coal and iron are already in hand.
+        # 7. furnace as soon as the stone is there -- not nested under
+        # coal+iron. It needs only stone, and gating it on coal left 1640
+        # steps holding 4 stone with no furnace placed (seeds 7000-7019).
+        if not ach['place_furnace'] and self._spare_stone(inv) >= FURNACE_STONE:
+            act = self._goto_and_place(sem, pos, WALKABLE, A['place_furnace'])
+            if act is not None:
+                return act
+
+        # 8. iron tools, once coal and iron are in hand. No place_furnace
+        # gate: _make_iron already builds whichever station is missing, and
+        # gating on it sent 1290 full-recipe steps to the stone-mining branch
+        # above while _make_iron ran 75 times (seeds 9000-9061).
         if inv['coal'] >= 1 and inv['iron'] >= 1:
-            if not ach['place_furnace']:
-                if self._spare_stone(inv) >= FURNACE_STONE:
-                    act = self._goto_and_place(sem, pos, WALKABLE,
-                                               A['place_furnace'])
-                    if act is not None:
-                        return act
-                act = self._goto_and_do(sem, pos, {MAT['stone']},
-                                        avoid=self.placed_stone)
-                if act is not None:
-                    return act
             if not ach['make_iron_pickaxe']:
                 return self._make_iron(sem, pos, inv, A['make_iron_pickaxe'])
             if not ach['make_iron_sword']:

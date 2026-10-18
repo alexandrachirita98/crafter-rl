@@ -30,41 +30,44 @@ class EzGreedyDoubleDQN(DoubleDQN):
     def __init__(self, *args, ez_mu=2.0, ez_max_repeat=100, **kwargs):
         super().__init__(*args, **kwargs)
         self._mu, self._cap = ez_mu, ez_max_repeat
-        self._repeat_action, self._repeat_left = 0, 0
+        self._repeat_action = np.zeros(self._num_envs, dtype=np.int64)
+        self._repeat_left = np.zeros(self._num_envs, dtype=np.int64)
         # instrumentation, for the log line and the README
         self.draws = self.committed = self.committed_steps = 0
         self.repeat_mean = 0.0
         self.longest_draw = 0
 
-    def step(self, state):
+    def step(self, states):
+        n = len(states)
         if self._step_cnt < self._warmup_steps:
-            return torch.randint(self._action_num, (1,)).item()
+            return np.random.randint(self._action_num, size=n)
         # Advance the schedule every step, repeating or not, so epsilon decays
         # on the same clock as stage 03.
         self.eps = next(self._epsilon)
-        if self._repeat_left > 0:
-            self._repeat_left -= 1
+        if self._repeat_left[0] > 0:
+            self._repeat_left[0] -= 1
             self.committed_steps += 1
-            return self._repeat_action
+            return np.array([self._repeat_action[0]])
         if torch.rand(1).item() < self.eps:
-            self._repeat_action = torch.randint(self._action_num, (1,)).item()
+            self._repeat_action[0] = torch.randint(self._action_num, (1,)).item()
             # The cap is not optional: uncapped zipf(2.0) draws exceed
             # 300,000, holding one action for 30 episodes. Measurements in
             # stage_09_ez_greedy's --test-ez.
             drawn = min(int(np.random.zipf(self._mu)), self._cap)
-            self._repeat_left = drawn - 1
+            self._repeat_left[0] = drawn - 1
             self.draws += 1
             if drawn > 1:
                 self.committed += 1
             self.repeat_mean += (drawn - self.repeat_mean) / self.draws
             self.longest_draw = max(self.longest_draw, drawn)
-            return self._repeat_action
+            return np.array([self._repeat_action[0]])
         with torch.no_grad():
-            return self._estimator(_to_tensor(state)).argmax().item()
+            return self._estimator(
+                _to_tensor(states)).argmax(1).cpu().numpy()
 
-    def end_episode(self):
-        super().end_episode()
-        self._repeat_left = 0               # a new world; drop the walk
+    def end_episode(self, i):
+        super().end_episode(i)
+        self._repeat_left[i] = 0            # a new world; drop the walk
 
 
 AGENT_CLS = EzGreedyDoubleDQN
@@ -122,7 +125,7 @@ def test_solo(steps=20_000, capacity=2000, batch=8):
 
     frame = np.zeros((64, 64, 3), dtype=np.uint8)
     for _ in range(steps):
-        agent.step(frame)
+        agent.step(frame[None])
 
     pct = 100.0 * agent.committed_steps / steps
     print(f'\nat eps=1.0 over {steps:,} steps:')
@@ -141,9 +144,9 @@ def test_solo(steps=20_000, capacity=2000, batch=8):
     print(f'  cap never exceeded    {capped}   want True')
 
     # an episode boundary must drop an in-flight walk
-    agent._repeat_left, agent._repeat_action = 50, 3
-    agent.end_episode()
-    cleared = agent._repeat_left == 0
+    agent._repeat_left[0], agent._repeat_action[0] = 50, 3
+    agent.end_episode(0)
+    cleared = agent._repeat_left[0] == 0
     print(f'\nend_episode clears the walk    {cleared}   want True')
 
     ok = no_nstep and no_quant and fired and capped and cleared

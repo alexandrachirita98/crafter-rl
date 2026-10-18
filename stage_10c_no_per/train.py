@@ -58,31 +58,34 @@ class NoPerStack(MunchausenQRDQN):
                  reset_every=100_000, **kwargs):
         super().__init__(*args, **kwargs)
         self._mu, self._cap = ez_mu, ez_max_repeat
-        self._repeat_action, self._repeat_left = 0, 0
+        self._repeat_action = np.zeros(self._num_envs, dtype=np.int64)
+        self._repeat_left = np.zeros(self._num_envs, dtype=np.int64)
         self._reset_every = reset_every
 
     # ---------------------------------------------------- stage 09
 
-    def step(self, state):
+    def step(self, states):
+        n = len(states)
         if self._step_cnt < self._warmup_steps:
-            return torch.randint(self._action_num, (1,)).item()
+            return np.random.randint(self._action_num, size=n)
         # Advance the schedule every step, repeating or not, so epsilon
         # decays on the same clock as the other stages.
         self.eps = next(self._epsilon)
-        if self._repeat_left > 0:
-            self._repeat_left -= 1
-            return self._repeat_action
+        if self._repeat_left[0] > 0:
+            self._repeat_left[0] -= 1
+            return np.array([self._repeat_action[0]])
         if torch.rand(1).item() < self.eps:
-            self._repeat_action = torch.randint(self._action_num, (1,)).item()
+            self._repeat_action[0] = torch.randint(self._action_num, (1,)).item()
             # The cap is not optional -- see stage 09 for the draw statistics.
-            self._repeat_left = min(int(np.random.zipf(self._mu)), self._cap) - 1
-            return self._repeat_action
+            self._repeat_left[0] = min(int(np.random.zipf(self._mu)),
+                                       self._cap) - 1
+            return np.array([self._repeat_action[0]])
         with torch.no_grad():
-            return self._q(_to_tensor(state)).argmax().item()
+            return self._q(_to_tensor(states)).argmax(1).cpu().numpy()
 
-    def end_episode(self):
-        super().end_episode()               # stage 04 flushes its window here
-        self._repeat_left = 0               # a new world; drop the walk
+    def end_episode(self, i):
+        super().end_episode(i)               # stage 04 flushes its window here
+        self._repeat_left[i] = 0            # a new world; drop the walk
 
     # ---------------------------------------------------- stage 10
 
@@ -187,10 +190,10 @@ def test_no_per(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
         s = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
         s_ = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
         pre_head = net.adv[-1].weight.detach().clone()
-        agent.step(s)
-        if agent._repeat_left > 0:
+        agent.step(s[None])
+        if agent._repeat_left[0] > 0:
             repeats += 1
-        agent.learn(s, t % N_ACTIONS, float(t % 2), s_, 1.0)
+        agent.learn(0, s, t % N_ACTIONS, float(t % 2), s_, 1.0)
         if agent._step_cnt == reset_every + 1:
             reset_fired = not torch.equal(pre_head,
                                           net.adv[-1].weight.detach())

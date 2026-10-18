@@ -471,6 +471,15 @@ def test_demos():
 def main(argv=None):
     if '--test-demos' in (argv if argv is not None else sys.argv[1:]):
         return test_demos()
+    if '--num-envs' in (argv if argv is not None else sys.argv[1:]):
+        import argparse as _ap
+        _p = _ap.ArgumentParser(add_help=False)
+        _p.add_argument('--num-envs', type=int, default=1)
+        if _p.parse_known_args(argv if argv is not None else sys.argv[1:])[0].num_envs > 1:
+            raise SystemExit(
+                f'{STAGE_ID} runs a single-env loop (it reuses stage 11\'s '
+                'labelling loop); --num-envs > 1 is not supported')
+
     import stage_02_dqn.train as s02
     original = s02.train
     s02.train = train_aux
