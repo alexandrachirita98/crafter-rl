@@ -1,0 +1,1 @@
+python stage_02_dqn/train.py --total-steps 200000 --num-envs 16 --seed 2 --logdir logdir --eps-decay-steps 50000
