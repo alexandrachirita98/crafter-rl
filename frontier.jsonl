@@ -1,0 +1,3 @@
+{"step": 199, "episode": 0, "frontier": 1, "n_step": 10, "reward": 3.0999999046325684}
+{"step": 381, "episode": 1, "frontier": 1, "n_step": 10, "reward": 1.0999999046325684}
+{"step": 444, "episode": 2, "frontier": 1, "n_step": 10, "reward": 0.10000006854534149}
