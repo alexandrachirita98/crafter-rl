@@ -26,7 +26,9 @@ import torch
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from stage_02_dqn.train import _to_tensor, main as stage_02_main
+from common.masking import random_legal
+from stage_02_dqn.train import (_apply_mask, _mask_or_ones, _to_tensor,
+                                main as stage_02_main)
 from stage_08_per.train import (PERQRDQN, build as build_08,
                                 extra_args as extra_08)
 
@@ -45,10 +47,11 @@ class EzGreedy(PERQRDQN):
         self._repeat_action = np.zeros(self._num_envs, dtype=np.int64)
         self._repeat_left = np.zeros(self._num_envs, dtype=np.int64)
 
-    def step(self, states):
+    def step(self, states, masks=None):
         n = len(states)
+        masks = _mask_or_ones(masks, n, self._action_num)
         if self._step_cnt < self._warmup_steps:
-            return np.random.randint(self._action_num, size=n)
+            return random_legal(masks)
         # Advance the schedule once per call, repeating or not, so epsilon
         # decays on the same clock as stages 02-08.
         self.eps = next(self._epsilon)
@@ -56,11 +59,15 @@ class EzGreedy(PERQRDQN):
         actions = np.zeros(n, dtype=np.int64)
         need_q = np.zeros(n, dtype=bool)
         for i in range(n):
-            if self._repeat_left[i] > 0:
+            # A walk started while an action was legal can outlive its
+            # legality -- the table gets left behind, the wood gets spent.
+            # Abandoning the walk costs the tail of one repeat; holding it
+            # would press a button that provably cannot fire.
+            if self._repeat_left[i] > 0 and masks[i][self._repeat_action[i]] > 0:
                 self._repeat_left[i] -= 1
                 actions[i] = self._repeat_action[i]
             elif np.random.rand() < self.eps:
-                a = np.random.randint(self._action_num)
+                a = int(random_legal(masks[i][None])[0])
                 # The cap is not optional: over 200k draws zipf(2.0) has a
                 # median of 1 and a p99 near 60, but a max above 300,000 --
                 # one draw would hold an action for 30 episodes. Capped at 100
@@ -75,7 +82,8 @@ class EzGreedy(PERQRDQN):
         if need_q.any():
             with torch.no_grad():
                 q = self._q(_to_tensor(states[need_q]))
-                actions[need_q] = q.argmax(1).cpu().numpy()
+                actions[need_q] = _apply_mask(
+                    q, masks[need_q]).argmax(1).cpu().numpy()
         return actions
 
     def end_episode(self, i):

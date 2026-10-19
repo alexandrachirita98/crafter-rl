@@ -1,0 +1,26 @@
+Setting all rngs to seed=1
+stage stage_03_double  seed 1  steps 2,000  envs 1  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/crafter-run-85568/crafter_reward-stage_03_double/1/stats.jsonl
+[   1][     200], R/ep=  2.10, eps=1.00, loss=     nan, meanQ=    nan,   531 fps
+[   2][     400], R/ep=  2.10, eps=1.00, loss=     nan, meanQ=    nan,   526 fps
+[   2][     600], R/ep=  2.10, eps=0.91, loss=  0.0037, meanQ=  0.056,    98 fps
+[   3][     800], R/ep=  2.10, eps=0.72, loss=  0.0333, meanQ=  0.048,    46 fps
+[   4][    1000], R/ep=  1.85, eps=0.53, loss=  0.0055, meanQ=  0.050,    37 fps
+[   6][    1200], R/ep=  2.27, eps=0.34, loss=  0.0352, meanQ=  0.042,    33 fps
+[   6][    1400], R/ep=  2.27, eps=0.15, loss=  0.0301, meanQ=  0.040,    29 fps
+[   7][    1600], R/ep=  2.53, eps=0.05, loss=  0.0371, meanQ=  0.049,    27 fps
+[   8][    1800], R/ep=  2.47, eps=0.05, loss=  0.0009, meanQ=  0.071,    26 fps
+[   9][    2000], R/ep=  2.32, eps=0.05, loss=  0.0031, meanQ=  0.053,    25 fps
+
+done: 9 episodes in 1.3 min (25 fps), final_eps=0.050
+score over 9 episodes: 2.19%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  collect_sapling       77.8%
+  wake_up               77.8%
+  place_plant           66.7%
+  collect_wood          44.4%
+  eat_cow               22.2%
+  place_table           22.2%
+  collect_drink         11.1%

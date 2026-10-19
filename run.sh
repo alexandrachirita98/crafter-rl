@@ -274,6 +274,10 @@ summary = {
     'final_epsilon': final_eps,
     'warmup_steps': flag('warmup-steps', 20_000),
     'buffer_size': flag('buffer-size', 100_000),
+    # Which arm this is. Read off the command because train.py does not print
+    # it; without it the mask and control runs are indistinguishable in the
+    # summaries, which is the one comparison the masking experiment needs.
+    'mask': ('--mask' in cmd.split()) and ('--no-mask' not in cmd.split()),
     'episodes': n,
     'wall_minutes': wall,
     'fps': fps,

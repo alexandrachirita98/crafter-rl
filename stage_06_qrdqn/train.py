@@ -26,8 +26,10 @@ import torch.nn as nn
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
+from common.masking import random_legal
 from common.networks import quantile_midpoints     # (2i+1)/(2N), tested
-from stage_02_dqn.train import (DEVICE, N_ACTIONS, _to_tensor,
+from stage_02_dqn.train import (DEVICE, N_ACTIONS, _apply_mask,
+                                _mask_or_ones, _to_tensor,
                                 main as stage_02_main)
 from stage_04_nstep.train import NStepDoubleDQN, build as build_04
 from stage_05_dueling.train import DuelingNet, extra_args as extra_05
@@ -79,19 +81,20 @@ class QRDQN(NStepDoubleDQN):
         """The mean over quantiles IS the Q-value. (B, A)."""
         return self._estimator(states).mean(2)
 
-    def step(self, states):
+    def step(self, states, masks=None):
         # stage 02's batched step, with argmax over self._q (the mean over
         # quantiles) instead of the raw output
         n = len(states)
+        masks = _mask_or_ones(masks, n, self._action_num)
         if self._step_cnt < self._warmup_steps:
-            return np.random.randint(self._action_num, size=n)
+            return random_legal(masks)
         self.eps = next(self._epsilon)
         greedy = np.random.rand(n) >= self.eps
-        actions = np.random.randint(self._action_num, size=n)
+        actions = random_legal(masks)
         if greedy.any():
             with torch.no_grad():
                 q = self._q(_to_tensor(states[greedy]))
-                actions[greedy] = q.argmax(1).cpu().numpy()
+                actions[greedy] = _apply_mask(q, masks[greedy]).argmax(1).cpu().numpy()
         return actions
 
     def _update(self, states, actions, rewards, states_, mask, n):

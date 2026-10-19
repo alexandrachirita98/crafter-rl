@@ -62,7 +62,9 @@ def table(runs):
         budgets = {s.get('env_steps') for s in seeds}
         rows.append({
             'stage': stage,
-            'kind': kind,
+            # A summary written before run_kind existed carries None, which
+            # the row formatter cannot pad. Name it for what it is.
+            'kind': kind if kind is not None else '(unnamed)',
             'envs': sorted(envs),
             'budget': sorted(budgets),
             'seeds': sorted(s.get('seed') for s in seeds),
@@ -73,18 +75,24 @@ def table(runs):
             'eps': mean([s.get('final_epsilon') for s in seeds]),
             'fps': mean([s.get('fps') for s in seeds]),
             'minutes': mean([s.get('wall_minutes') for s in seeds]),
+            # Set only by runs recorded after masking landed; older summaries
+            # have no key at all, which is not the same as masking being off.
+            'mask': {s['mask'] for s in seeds if 'mask' in s},
         })
     rows.sort(key=lambda r: (r['stage'], -(r['score'] or 0)))
 
     head = (f"{'stage':<28} {'run_kind':<16} {'envs':>4} {'budget':>8} "
-            f"{'score%':>7} {'+-':>5} {'eps':>5} {'rew':>5} {'episodes':>8} "
-            f"{'fps':>5} {'min':>5}  seeds")
+            f"{'mask':>4} {'score%':>7} {'+-':>5} {'eps':>5} {'rew':>5} "
+            f"{'episodes':>8} {'fps':>5} {'min':>5}  seeds")
     print(head)
     print('-' * len(head))
     for r in rows:
         envs = ','.join(str(e) for e in r['envs'])
         budget = ','.join(f'{b // 1000}k' for b in r['budget'] if b)
+        mask = ('-' if not r['mask']
+                else ','.join('on' if m else 'off' for m in sorted(r['mask'])))
         print(f"{r['stage']:<28} {r['kind']:<16} {envs:>4} {budget:>8} "
+              f"{mask:>4} "
               f"{fmt(r['score'], 7)} {fmt(r['spread'], 5)} "
               f"{fmt(r['eps'], 5)} {fmt(r['reward'], 5)} "
               f"{fmt(r['episodes'], 8, 0)} {fmt(r['fps'], 5, 0)} "

@@ -35,6 +35,7 @@ import torch.optim as O
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from common.env import N_ACTIONS, OBS_SHAPE, VecEnv, bootstrap_mask
+from common.masking import legal_masks, random_legal
 from common.metrics import ACHIEVEMENTS, score_pooled
 
 STAGE_ID = 'stage_02_dqn'
@@ -87,6 +88,24 @@ def _to_tensor(obs):
     # contiguous: permute only restrides, and View calls .view(), which needs
     # contiguous input.
     return x.permute(0, 3, 1, 2).contiguous().to(DEVICE)
+
+
+def _mask_or_ones(masks, n, action_num):
+    """All-ones when masking is off, so an unmasked run is bit-identical."""
+    if masks is None:
+        return np.ones((n, action_num), dtype=np.float32)
+    return masks
+
+
+def _apply_mask(qvals, masks):
+    """-1e8 on illegal actions so argmax can never pick one.
+
+    Additive rather than assignment because the stages differ in what they
+    hand over: a plain (N,17) of Q-values, or the quantile mean. Both are
+    finite, so -1e8 dominates without producing NaN the way -inf * 0 would.
+    """
+    mt = torch.as_tensor(masks, device=qvals.device, dtype=qvals.dtype)
+    return qvals + (1.0 - mt) * -1e8
 
 
 # -------------------------------------------------------------- 2. epsilon
@@ -189,8 +208,14 @@ class DQN:
         assert warmup_steps > self._buffer._batch_size, (
             'You should have at least a batch in the ER.')
 
-    def step(self, states):
+    def step(self, states, masks=None):
         """Epsilon-greedy over a batch. (N,64,64,3) uint8 -> (N,) actions.
+
+        masks is (N,17) with 1.0 on legal actions; None means no masking and
+        reproduces every run recorded before masking existed. The mask applies
+        to the random branch as well as the greedy one -- exploration is most
+        of training, so leaving it unmasked would keep spending most presses on
+        buttons that cannot fire.
 
         One forward pass for all N envs, not N passes: the batching is where
         the throughput comes from. The coin flip is per env -- a single shared
@@ -202,15 +227,17 @@ class DQN:
         to keep it on the env-step clock.
         """
         n = len(states)
+        masks = _mask_or_ones(masks, n, self._action_num)
         if self._step_cnt < self._warmup_steps:
-            return np.random.randint(self._action_num, size=n)
+            return random_legal(masks)
 
         self.eps = next(self._epsilon)
         greedy = np.random.rand(n) >= self.eps
-        actions = np.random.randint(self._action_num, size=n)
+        actions = random_legal(masks)
         if greedy.any():
             with torch.no_grad():
                 qvals = self._estimator(_to_tensor(states[greedy]))
+                qvals = _apply_mask(qvals, masks[greedy])
                 actions[greedy] = qvals.argmax(1).cpu().numpy()
         return actions
 
@@ -270,7 +297,7 @@ class DQN:
 # ----------------------------------------------------------------- 5. loop
 
 
-def train(agent, env, step_num=100_000, log_every=10_000):
+def train(agent, env, step_num=100_000, log_every=10_000, use_mask=False):
     """The lab's loop, over a VecEnv on Crafter's 4-tuple API.
 
     step_num is ENV STEPS, the benchmark budget, not loop iterations: with
@@ -285,6 +312,12 @@ def train(agent, env, step_num=100_000, log_every=10_000):
 
     Logs at a fixed interval rather than per episode, since Crafter episodes
     run to thousands of steps and stats.jsonl is the real record.
+
+    use_mask turns on legal-action masking. It reads inventory and the
+    semantic map out of info, which is privileged state -- not visible in the
+    64x64 image the agent sees -- so a masked score is not strictly comparable
+    to the pixels-only numbers in the Crafter paper. Off by default, which
+    keeps every run recorded before masking existed reproducible.
     """
     num_envs = env.num_envs
     ep_reward = np.zeros(num_envs, dtype=np.float64)
@@ -292,12 +325,23 @@ def train(agent, env, step_num=100_000, log_every=10_000):
     states = env.reset()
     episodes = 0
     start = time.time()
+    # reset() returns no info, so the first step runs unmasked -- which is
+    # what legal_masks would give for a fresh player anyway.
+    masks = None
 
     for step in range(0, step_num, num_envs):
 
-        actions = agent.step(states)
+        actions = agent.step(states, masks)
 
         states_, rewards, dones, infos = env.step(actions)
+
+        if use_mask:
+            # dones matters. VecEnv auto-resets and hands back the DYING
+            # step's info beside the NEXT episode's first observation, so
+            # masking the new state with it would forbid legal actions for a
+            # whole episode's first step. legal_masks falls back to all-ones
+            # wherever done is set.
+            masks = legal_masks(infos, dones)
 
         for i in range(num_envs):
             agent.learn(i, states[i], actions[i], rewards[i], states_[i],
@@ -371,6 +415,18 @@ def parse_args(argv=None, extra_args=None):
                    help='linear over the first 25%% of a 1M run')
 
     p.add_argument('--log-every', type=int, default=10_000)
+
+    # Masking defaults OFF so every run already in */results/ reproduces.
+    # --no-mask is the explicit control arm: it is the default, but naming it
+    # on the command line puts it in command_seed<N>.txt, which is what the
+    # summary reads back.
+    mask = p.add_mutually_exclusive_group()
+    mask.add_argument('--mask', dest='mask', action='store_true',
+                      help='legal-action masking (privileged state; see '
+                           'common/masking.py)')
+    mask.add_argument('--no-mask', dest='mask', action='store_false',
+                      help='disable legal-action masking (control arm)')
+    p.set_defaults(mask=False)
 
     # A later stage adds its own flags here; see stage_04_nstep/train.py.
     if extra_args is not None:
@@ -458,7 +514,8 @@ def main(argv=None, agent_cls=DQN, stage_id=STAGE_ID, extra_args=None,
     )
 
     _, episodes, elapsed = train(agent, env, step_num=args.total_steps,
-                                 log_every=args.log_every)
+                                 log_every=args.log_every,
+                                 use_mask=args.mask)
 
     # final_eps printed explicitly: the progress lines are gated on
     # --log-every, so a run shorter than one interval has none to scrape.

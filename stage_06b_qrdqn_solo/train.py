@@ -65,7 +65,10 @@ class QRDoubleDQN(DoubleDQN):
         """The mean over quantiles IS the Q-value. (B, A)."""
         return self._estimator(states).mean(2)
 
-    def step(self, states):
+    def step(self, states, masks=None):
+        # Diagnostic solo variant: accepts masks for signature compatibility
+        # and ignores them. Not a stage the run plan masks.
+        del masks
         n = len(states)
         if self._step_cnt < self._warmup_steps:
             return np.random.randint(self._action_num, size=n)

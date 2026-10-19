@@ -31,7 +31,9 @@ import torch.nn as nn
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from stage_02_dqn.train import _to_tensor, main as stage_02_main
+from common.masking import random_legal
+from stage_02_dqn.train import (_apply_mask, _mask_or_ones, _to_tensor,
+                                main as stage_02_main)
 from stage_06_qrdqn.train import build as build_06, extra_args as extra_06
 from stage_07_munchausen.train import MunchausenQRDQN
 from stage_10_drq_resets.train import random_shift
@@ -64,24 +66,27 @@ class NoPerStack(MunchausenQRDQN):
 
     # ---------------------------------------------------- stage 09
 
-    def step(self, states):
+    def step(self, states, masks=None):
         n = len(states)
+        masks = _mask_or_ones(masks, n, self._action_num)
         if self._step_cnt < self._warmup_steps:
-            return np.random.randint(self._action_num, size=n)
+            return random_legal(masks)
         # Advance the schedule every step, repeating or not, so epsilon
         # decays on the same clock as the other stages.
         self.eps = next(self._epsilon)
-        if self._repeat_left[0] > 0:
+        # A held action can outlive its legality; see stage 09.
+        if self._repeat_left[0] > 0 and masks[0][self._repeat_action[0]] > 0:
             self._repeat_left[0] -= 1
             return np.array([self._repeat_action[0]])
         if torch.rand(1).item() < self.eps:
-            self._repeat_action[0] = torch.randint(self._action_num, (1,)).item()
+            self._repeat_action[0] = int(random_legal(masks[:1])[0])
             # The cap is not optional -- see stage 09 for the draw statistics.
             self._repeat_left[0] = min(int(np.random.zipf(self._mu)),
                                        self._cap) - 1
             return np.array([self._repeat_action[0]])
         with torch.no_grad():
-            return self._q(_to_tensor(states)).argmax(1).cpu().numpy()
+            q = self._q(_to_tensor(states))
+            return _apply_mask(q, masks).argmax(1).cpu().numpy()
 
     def end_episode(self, i):
         super().end_episode(i)               # stage 04 flushes its window here

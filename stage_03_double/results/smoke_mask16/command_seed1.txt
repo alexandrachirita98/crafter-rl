@@ -1,0 +1,1 @@
+python stage_03_double/train.py --total-steps 8000 --num-envs 16 --seed 1 --logdir logdir --mask --eps-decay-steps 4000 --warmup-steps 2000 --buffer-size 8000 --log-every 2000

@@ -1,0 +1,22 @@
+Setting all rngs to seed=1
+stage stage_03_double  seed 1  steps 8,000  envs 16  device cpu
+buffer 8,000 transitions = 0.2 GB host RAM
+logging to /tmp/crafter-run-86025/crafter_reward-stage_03_double/1/shard*/stats.jsonl
+[   2][    2000], R/ep=  1.60, eps=1.00, loss=     nan, meanQ=    nan,   652 fps
+[  15][    4000], R/ep=  3.10, eps=0.53, loss=  0.0138, meanQ=  0.015,    38 fps
+[  30][    6000], R/ep=  3.50, eps=0.05, loss=  0.0102, meanQ=  0.202,    30 fps
+[  41][    8000], R/ep=  2.80, eps=0.05, loss=  0.0065, meanQ=  0.434,    27 fps
+
+done: 41 episodes in 4.9 min (27 fps), final_eps=0.050
+score over 41 episodes: 2.46%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up               97.6%
+  collect_sapling       92.7%
+  place_plant           92.7%
+  collect_wood          53.7%
+  collect_drink         19.5%
+  place_table           17.1%
+  defeat_zombie          2.4%
+  eat_cow                2.4%
+  make_wood_pickaxe      2.4%
