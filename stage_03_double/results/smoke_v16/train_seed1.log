@@ -1,0 +1,19 @@
+Setting all rngs to seed=1
+stage stage_03_double  seed 1  steps 8,000  envs 16  device cuda
+buffer 8,000 transitions = 0.2 GB host RAM
+logging to /tmp/crafter-278092/crafter_reward-stage_03_double/1/shard*/stats.jsonl
+[   1][    2000], R/ep= -0.90, eps=1.00, loss=     nan, meanQ=    nan,   530 fps
+[  17][    4000], R/ep=  1.60, eps=0.53, loss=  0.0087, meanQ=  0.031,   125 fps
+[  29][    6000], R/ep=  2.30, eps=0.05, loss=  0.0287, meanQ=  0.091,   108 fps
+[  40][    8000], R/ep=  2.20, eps=0.05, loss=  0.0074, meanQ=  0.136,   103 fps
+
+done: 40 episodes in 1.3 min (103 fps), final_eps=0.050
+score over 40 episodes: 1.56%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  collect_sapling       85.0%
+  place_plant           82.5%
+  wake_up               77.5%
+  collect_wood          25.0%
+  defeat_zombie         10.0%
+  collect_drink          5.0%

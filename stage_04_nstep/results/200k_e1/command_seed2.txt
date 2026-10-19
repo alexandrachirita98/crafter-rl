@@ -1,0 +1,1 @@
+python stage_04_nstep/train.py --total-steps 200000 --num-envs 1 --seed 2 --logdir logdir

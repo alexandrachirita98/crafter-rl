@@ -1,0 +1,5 @@
+$ python stage_05_dueling/train.py --test-dueling
+q.shape       (8, 17)  want (8, 17)  ok
+|mean_a Q - V| 7.45e-09  want < 1e-5  ok
+
+PASS
