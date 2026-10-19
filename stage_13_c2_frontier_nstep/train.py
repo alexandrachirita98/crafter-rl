@@ -39,6 +39,7 @@ import numpy as np
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from common.env import bootstrap_mask
+from common.masking import legal_mask
 from common.metrics import ACHIEVEMENTS
 from stage_02_dqn.train import main as stage_02_main
 from stage_11_c1_achievement_aux.train import counts_vector
@@ -131,7 +132,8 @@ class FrontierDQfD(DQfD):
         self._n_step = self._tracker.end_of_episode(achievements)
 
 
-def train_frontier(agent, env, step_num=100_000, log_every=10_000):
+def train_frontier(agent, env, step_num=100_000, log_every=10_000,
+                   use_mask=False):
     """Stage 11's loop, plus the per-episode frontier log.
 
     frontier.jsonl is worth keeping even if n never moves: "the dial stayed at
@@ -143,12 +145,18 @@ def train_frontier(agent, env, step_num=100_000, log_every=10_000):
 
     N = 0
     ep_rewards = [0.0]
-    state, done = env.reset(), False
+    # main() hands this stage a VecEnv(num_envs=1), not a bare crafter.Env,
+    # so everything here is a length-1 batch. See stage 11's loop.
+    state, done = env.reset()[0], False
     start = time.time()
+    mask = None                     # reset() returns no info
 
     for step in range(step_num):
-        action = agent.step(state[None])[0]
-        state_, reward, done, info = env.step(action)
+        action = agent.step(state[None], mask)[0]
+        state_, reward, done, info = env.step([action])
+        state_, reward, done, info = state_[0], reward[0], done[0], info[0]
+        if use_mask:
+            mask = legal_mask(info)[None]
         agent.learn(0, state, action, reward, state_,
                     bootstrap_mask(done, info),
                     counts=counts_vector(info))
@@ -163,10 +171,15 @@ def train_frontier(agent, env, step_num=100_000, log_every=10_000):
                 'step': step + 1, 'episode': N,
                 'frontier': agent._tracker.frontier,
                 'n_step': agent._n_step,
-                'reward': ep_rewards[N],
+                # float(): VecEnv rewards are np.float32, which json
+                # refuses to encode.
+                'reward': float(ep_rewards[N]),
             }) + '\n')
             flog.flush()
-            state, done = env.reset(), False
+            # VecEnv auto-resets; state_ is already the next episode's first
+            # frame, so resetting again would discard it.
+            done = False
+            mask = None             # new world, new player: nothing owned
             ep_rewards.append(0.0)
             N += 1
 

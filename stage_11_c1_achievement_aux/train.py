@@ -42,6 +42,7 @@ import torch.nn.functional as F
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from common.env import bootstrap_mask
+from common.masking import legal_mask
 from common.metrics import ACHIEVEMENTS
 from common.replay import beta_by_step
 from stage_02_dqn.train import DEVICE, N_ACTIONS, _to_tensor, main as stage_02_main
@@ -281,16 +282,32 @@ class AuxDrQResets(DrQResets):
 # ----------------------------------------------------------- 5. the loop
 
 
-def train_aux(agent, env, step_num=100_000, log_every=10_000):
-    """Stage 02's loop, passing info['achievements'] down to the labeller."""
+def train_aux(agent, env, step_num=100_000, log_every=10_000,
+              use_mask=False):
+    """Stage 02's loop, passing info['achievements'] down to the labeller.
+
+    use_mask turns on legal-action masking. This loop runs ONE env and calls
+    reset() itself, so unlike the VecEnv loop there is no stale-info seam --
+    but the mask must still be dropped on reset, because reset() returns no
+    info and the fresh player owns nothing.
+    """
     N = 0
     ep_rewards = [0.0]
-    state, done = env.reset(), False
+    # main() hands these stages a VecEnv(num_envs=1), not a bare crafter.Env,
+    # so everything here is a length-1 batch: reset() gives (1,64,64,3) and
+    # step() wants a sequence of actions. Indexing [0] back out keeps the rest
+    # of the loop scalar, which is what the labeller and the n-step window
+    # expect.
+    state, done = env.reset()[0], False
     start = time.time()
+    mask = None                     # reset() returns no info
 
     for step in range(step_num):
-        action = agent.step(state[None])[0]
-        state_, reward, done, info = env.step(action)
+        action = agent.step(state[None], mask)[0]
+        state_, reward, done, info = env.step([action])
+        state_, reward, done, info = state_[0], reward[0], done[0], info[0]
+        if use_mask:
+            mask = legal_mask(info)[None]
         agent.learn(0, state, action, reward, state_,
                     bootstrap_mask(done, info),
                     counts=counts_vector(info))
@@ -299,7 +316,11 @@ def train_aux(agent, env, step_num=100_000, log_every=10_000):
 
         if done:
             agent.end_episode(0)
-            state, done = env.reset(), False
+            # VecEnv auto-resets, so state_ is already the new episode's
+            # first frame; calling reset() here would throw it away and
+            # start a third episode mid-stream.
+            done = False
+            mask = None             # new world, new player: nothing owned
             ep_rewards.append(0.0)
             N += 1
 
