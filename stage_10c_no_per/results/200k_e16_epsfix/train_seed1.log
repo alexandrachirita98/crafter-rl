@@ -1,9 +1,9 @@
 Setting all rngs to seed=1
 stage stage_10c_no_per  seed 1  steps 200,000  envs 16  device cuda
 buffer 100,000 transitions = 2.5 GB host RAM
-logging to /tmp/crafter-278641/crafter_reward-stage_10c_no_per/1/shard*/stats.jsonl
-[  50][   10000], R/ep=  1.70, eps=1.00, loss=     nan, meanQ=    nan,   134 fps
-[ 107][   20000], R/ep=  1.10, eps=1.00, loss=     nan, meanQ=    nan,   127 fps
+logging to /tmp/crafter-280274/crafter_reward-stage_10c_no_per/1/shard*/stats.jsonl
+[  50][   10000], R/ep=  1.40, eps=1.00, loss=     nan, meanQ=    nan,   132 fps
+[ 115][   20000], R/ep=  2.00, eps=1.00, loss=     nan, meanQ=    nan,   118 fps
 Traceback (most recent call last):
   File "/export/home/acs/stud/a/alexandra.chirita98/code/crafter-rl/stage_10c_no_per/train.py", line 231, in <module>
     sys.exit(main() or 0)
