@@ -74,19 +74,32 @@ class NoPerStack(MunchausenQRDQN):
         # Advance the schedule every step, repeating or not, so epsilon
         # decays on the same clock as the other stages.
         self.eps = next(self._epsilon)
-        # A held action can outlive its legality; see stage 09.
-        if self._repeat_left[0] > 0 and masks[0][self._repeat_action[0]] > 0:
-            self._repeat_left[0] -= 1
-            return np.array([self._repeat_action[0]])
-        if torch.rand(1).item() < self.eps:
-            self._repeat_action[0] = int(random_legal(masks[:1])[0])
-            # The cap is not optional -- see stage 09 for the draw statistics.
-            self._repeat_left[0] = min(int(np.random.zipf(self._mu)),
-                                       self._cap) - 1
-            return np.array([self._repeat_action[0]])
-        with torch.no_grad():
-            q = self._q(_to_tensor(states))
-            return _apply_mask(q, masks).argmax(1).cpu().numpy()
+
+        actions = np.zeros(n, dtype=np.int64)
+        need_q = np.zeros(n, dtype=bool)
+        for i in range(n):
+            # One walk per env, as in stage 09: a walk is "hold this action
+            # for the next k steps in THIS world". A held action can outlive
+            # its legality, so a walk whose action went illegal is abandoned.
+            if self._repeat_left[i] > 0 and masks[i][self._repeat_action[i]] > 0:
+                self._repeat_left[i] -= 1
+                actions[i] = self._repeat_action[i]
+            elif np.random.rand() < self.eps:
+                a = int(random_legal(masks[i][None])[0])
+                # The cap is not optional -- see stage 09 for the draw stats.
+                self._repeat_action[i] = a
+                self._repeat_left[i] = min(int(np.random.zipf(self._mu)),
+                                           self._cap) - 1
+                actions[i] = a
+            else:
+                need_q[i] = True
+        # One batched forward pass for whichever envs want a greedy action.
+        if need_q.any():
+            with torch.no_grad():
+                q = self._q(_to_tensor(states[need_q]))
+                actions[need_q] = _apply_mask(
+                    q, masks[need_q]).argmax(1).cpu().numpy()
+        return actions
 
     def end_episode(self, i):
         super().end_episode(i)               # stage 04 flushes its window here
@@ -140,10 +153,11 @@ def build(args, capacity):
 # ------------------------------------------------------------- self-test
 
 
-def test_no_per(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
+def test_no_per(steps=40, warmup=20, reset_every=30, capacity=64, batch=8,
+                n_envs=4):
     """Check the splice, not the mechanisms -- each has its own stage test.
 
-    Four things can break when PER is pulled out from under stages 09 and 10:
+    Five things can break when PER is pulled out from under stages 09 and 10:
 
       1. the buffer is the uniform n-step one and sample() returns six
          tensors, not eight;
@@ -151,7 +165,12 @@ def test_no_per(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
          stage-08 method is left anywhere in the MRO;
       3. the committed walk still runs, which is stage 09 surviving the swap;
       4. the reset still fires and still keeps the buffer, which is stage 10
-         surviving it.
+         surviving it;
+      5. step() returns one action per env. This ran with n_envs=1 until a
+         16-env run crashed in the train loop: a single-env step() returns a
+         length-1 array, and worse, one walk shared across envs means no env
+         ever holds an action for its own k steps. So the driver below steps a
+         real batch.
     """
     import argparse
     import torch.optim as O
@@ -169,7 +188,7 @@ def test_no_per(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
     agent = NoPerStack(net, buffer, O.Adam(net.parameters(), lr=1e-4),
                        get_epsilon_schedule(1.0, 0.05, steps), N_ACTIONS,
                        gamma=0.99, warmup_steps=warmup, update_steps=2,
-                       update_target_steps=10, **extra)
+                       update_target_steps=10, num_envs=n_envs, **extra)
 
     # 1. the buffer
     uniform = isinstance(buffer, NStepReplayMemory)
@@ -187,34 +206,56 @@ def test_no_per(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
     print(f'_update is QRDQN\'s (6 args)         {upd}   want True')
     print(f'_target_quantiles is Munchausen\'s   {tgt}   want True')
 
-    # 3 and 4. run frames and watch both behaviours
+    # 3, 4 and 5. run frames on a real batch and watch both behaviours.
+    # _step_cnt now strides by n_envs, so the reset cannot be spotted by an
+    # equality on the step number, and a weight comparison would also catch
+    # every ordinary gradient step. Count the calls and check the head moved
+    # across the one frame that reset.
+    resets = []
+    real_reset_head = agent._reset_head
+
+    def counting_reset_head():
+        resets.append(agent._step_cnt)
+        real_reset_head()
+
+    agent._reset_head = counting_reset_head
+
     rng = np.random.RandomState(0)
-    repeats, reset_fired = 0, False
-    print(f'\nrunning {steps} steps with reset_every={reset_every}:')
+    repeats, reset_fired, widths_ok = 0, False, True
+    print(f'\nrunning {steps} steps with reset_every={reset_every}, '
+          f'{n_envs} envs:')
     for t in range(steps):
-        s = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
-        s_ = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+        s = rng.randint(0, 256, (n_envs, 64, 64, 3), dtype=np.uint8)
+        s_ = rng.randint(0, 256, (n_envs, 64, 64, 3), dtype=np.uint8)
         pre_head = net.adv[-1].weight.detach().clone()
-        agent.step(s[None])
-        if agent._repeat_left[0] > 0:
+        before = len(resets)
+        actions = agent.step(s)
+        # the bug this test used to walk past: a single-env step() hands the
+        # train loop one action for sixteen envs.
+        widths_ok &= np.shape(actions) == (n_envs,)
+        if agent._repeat_left.max() > 0:
             repeats += 1
-        agent.learn(0, s, t % N_ACTIONS, float(t % 2), s_, 1.0)
-        if agent._step_cnt == reset_every + 1:
-            reset_fired = not torch.equal(pre_head,
-                                          net.adv[-1].weight.detach())
+        for i in range(n_envs):
+            agent.learn(i, s[i], t % N_ACTIONS, float(t % 2), s_[i], 1.0)
+        if len(resets) > before and not torch.equal(
+                pre_head, net.adv[-1].weight.detach()):
+            reset_fired = True
 
     walked = repeats > 0
     kept = len(buffer) > 0
     batch_six = len(buffer.sample()) == 6
     print(f'\nez-greedy committed a walk         {walked}   want True  '
-          f'({repeats} steps inside a repeat)')
+          f'({repeats} frames inside a repeat)')
     print(f'sample() returns 6 tensors         {batch_six}   want True')
-    print(f'head reset fired                   {reset_fired}   want True')
+    print(f'head reset fired                   {reset_fired}   want True  '
+          f'(at step {resets})')
     print(f'buffer kept its data               {kept}   want True  '
           f'({len(buffer)} transitions)')
+    print(f'step() gave one action per env     {widths_ok}   want True  '
+          f'({n_envs} envs)')
 
     ok = (uniform and not_per and per_gone and upd and tgt and walked
-          and batch_six and reset_fired and kept
+          and batch_six and reset_fired and kept and widths_ok
           and 'total_steps' not in extra)
     print('\nPASS' if ok else '\nFAIL')
     return 0 if ok else 1

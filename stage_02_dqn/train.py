@@ -332,6 +332,12 @@ def train(agent, env, step_num=100_000, log_every=10_000, use_mask=False):
     for step in range(0, step_num, num_envs):
 
         actions = agent.step(states, masks)
+        # Every stage's step() is (N,64,64,3) in, (N,) out. A stage written
+        # for one env returns one action and the learn() loop below dies on
+        # actions[1] fifteen frames away from the cause, so name it here.
+        assert np.shape(actions) == (num_envs,), (
+            f'{type(agent).__name__}.step() returned {np.shape(actions)}, '
+            f'want ({num_envs},) -- a single-env step() on a vec env')
 
         states_, rewards, dones, infos = env.step(actions)
 
