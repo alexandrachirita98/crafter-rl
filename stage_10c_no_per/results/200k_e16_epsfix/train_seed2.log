@@ -1,0 +1,20 @@
+Setting all rngs to seed=2
+stage stage_10c_no_per  seed 2  steps 200,000  envs 16  device cuda
+buffer 100,000 transitions = 2.5 GB host RAM
+logging to /tmp/crafter-278587/crafter_reward-stage_10c_no_per/2/shard*/stats.jsonl
+[  50][   10000], R/ep=  0.80, eps=1.00, loss=     nan, meanQ=    nan,   142 fps
+[ 112][   20000], R/ep=  1.00, eps=1.00, loss=     nan, meanQ=    nan,   130 fps
+Traceback (most recent call last):
+  File "/export/home/acs/stud/a/alexandra.chirita98/code/crafter-rl/stage_10c_no_per/train.py", line 231, in <module>
+    sys.exit(main() or 0)
+             ^^^^^^
+  File "/export/home/acs/stud/a/alexandra.chirita98/code/crafter-rl/stage_10c_no_per/train.py", line 226, in main
+    return stage_02_main(argv, agent_cls=NoPerStack, stage_id=STAGE_ID,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/export/home/acs/stud/a/alexandra.chirita98/code/crafter-rl/stage_02_dqn/train.py", line 516, in main
+    _, episodes, elapsed = train(agent, env, step_num=args.total_steps,
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/export/home/acs/stud/a/alexandra.chirita98/code/crafter-rl/stage_02_dqn/train.py", line 347, in train
+    agent.learn(i, states[i], actions[i], rewards[i], states_[i],
+                              ~~~~~~~^^^
+IndexError: index 1 is out of bounds for axis 0 with size 1
