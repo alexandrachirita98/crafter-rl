@@ -1,0 +1,41 @@
+Setting all rngs to seed=2
+stage stage_10c_no_per  seed 2  steps 200,000  envs 16  device cuda
+buffer 100,000 transitions = 2.5 GB host RAM
+logging to /tmp/crafter-280429/crafter_reward-stage_10c_no_per/2/shard*/stats.jsonl
+[  55][   10000], R/ep=  1.00, eps=1.00, loss=     nan, meanQ=    nan,   128 fps
+[ 113][   20000], R/ep=  1.00, eps=1.00, loss=     nan, meanQ=    nan,   125 fps
+[ 173][   30000], R/ep=  0.70, eps=0.81, loss=  2.5727, meanQ=  0.263,    95 fps
+[ 233][   40000], R/ep=  1.80, eps=0.62, loss=  1.4286, meanQ=  0.308,    85 fps
+[ 294][   50000], R/ep=  2.40, eps=0.43, loss=  2.6394, meanQ=  0.321,    79 fps
+[ 350][   60000], R/ep=  1.70, eps=0.24, loss=  2.9287, meanQ=  0.152,    77 fps
+[ 412][   70000], R/ep=  1.30, eps=0.05, loss=  2.7568, meanQ=  0.460,    74 fps
+[ 471][   80000], R/ep=  1.00, eps=0.05, loss=  3.5149, meanQ=  0.136,    73 fps
+[ 527][   90000], R/ep=  1.20, eps=0.05, loss=  2.0001, meanQ=  0.246,    72 fps
+[reset] head re-initialised at step 100000
+[ 583][  100000], R/ep=  1.50, eps=0.05, loss=  1.5265, meanQ=  0.183,    71 fps
+[ 642][  110000], R/ep=  1.20, eps=0.05, loss=  1.6297, meanQ=  0.282,    71 fps
+[ 700][  120000], R/ep=  2.10, eps=0.05, loss=  1.7733, meanQ=  0.317,    70 fps
+[ 759][  130000], R/ep=  2.60, eps=0.05, loss=  1.4387, meanQ= -0.044,    70 fps
+[ 816][  140000], R/ep=  2.40, eps=0.05, loss=  1.8870, meanQ=  0.268,    69 fps
+[ 877][  150000], R/ep=  2.20, eps=0.05, loss=  1.6258, meanQ=  0.070,    69 fps
+[ 935][  160000], R/ep=  2.50, eps=0.05, loss=  1.9746, meanQ=  0.103,    69 fps
+[ 987][  170000], R/ep=  2.60, eps=0.05, loss=  1.6761, meanQ=  0.319,    69 fps
+[1038][  180000], R/ep=  3.10, eps=0.05, loss=  1.6985, meanQ= -0.023,    69 fps
+[1092][  190000], R/ep=  2.60, eps=0.05, loss=  1.9210, meanQ=  0.124,    68 fps
+[reset] head re-initialised at step 200000
+[1148][  200000], R/ep=  2.50, eps=0.05, loss=  1.3237, meanQ=  0.007,    68 fps
+
+done: 1148 episodes in 48.8 min (68 fps), final_eps=0.050
+score over 1148 episodes: 2.07%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  collect_sapling       88.1%
+  place_plant           63.1%
+  wake_up               62.9%
+  collect_wood          24.7%
+  collect_drink         13.7%
+  defeat_zombie          8.4%
+  eat_cow                7.5%
+  place_table            2.0%
+  defeat_skeleton        0.3%
+  make_wood_pickaxe      0.2%
