@@ -42,8 +42,9 @@ from common.env import bootstrap_mask
 from common.masking import legal_mask
 from common.metrics import ACHIEVEMENTS
 from stage_02_dqn.train import main as stage_02_main
-from stage_11_c1_achievement_aux.train import counts_vector
-from stage_12_c3_demonstrations.train import (DQfD, build as build_12,
+from stage_11_c1_achievement_aux.train import counts_vector, pick_base
+from stage_12_c3_demonstrations.train import (DQfD, DQfD03, build as build_12,
+                                              build_base03 as build_12_base03,
                                               extra_args as extra_12)
 
 STAGE_ID = 'stage_13_c2_frontier_nstep'
@@ -75,11 +76,12 @@ class FrontierTracker:
     first things to ablate.
     """
 
-    def __init__(self, window=100, threshold=0.20):
+    def __init__(self, window=100, threshold=0.20, tier_n=None):
         self.history = deque(maxlen=window)
         self.threshold = threshold
+        self._tier_n = tier_n or TIER_N
         self.frontier = 1
-        self.n = TIER_N[1]                   # start long: 10
+        self.n = self._tier_n[1]             # start where the schedule starts
 
     def end_of_episode(self, achievements):
         """achievements: {name: count} exactly as info['achievements'] gives."""
@@ -95,7 +97,7 @@ class FrontierTracker:
         self.frontier = frontier
         # n never grows back. A lucky streak should not undo the sharpening,
         # or n oscillates and training never settles.
-        self.n = min(self.n, TIER_N[frontier])
+        self.n = min(self.n, self._tier_n[frontier])
         return self.n
 
 
@@ -105,18 +107,24 @@ def bbf_n(step, total_steps, n_start=10, n_end=3, anneal_frac=0.5):
     return int(round(n_start + frac * (n_end - n_start)))
 
 
-class FrontierDQfD(DQfD):
-    """Stage 12, with _n_step under the tracker's control."""
+class FrontierMixin:
+    """_n_step under the tracker's control. Base-independent."""
 
     def __init__(self, *args, frontier_window=100, frontier_threshold=0.20,
-                 fixed_n=None, bbf_schedule=False, **kwargs):
+                 fixed_n=None, bbf_schedule=False, tier_n=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._tracker = FrontierTracker(window=frontier_window,
-                                        threshold=frontier_threshold)
+                                        threshold=frontier_threshold,
+                                        tier_n=tier_n)
         self._fixed_n = fixed_n
         self._bbf = bbf_schedule
         if fixed_n is not None:
             self._n_step = fixed_n
+        else:
+            # Without this the agent runs at --n-step's value (10 by default)
+            # until the tracker's first decision, 100 episodes in -- even
+            # when the schedule's tier 1 says something shorter.
+            self._n_step = self._tracker.n
 
     def on_episode_end(self, achievements):
         """Called by the loop after end_episode() has flushed the window.
@@ -130,6 +138,14 @@ class FrontierDQfD(DQfD):
             self._n_step = bbf_n(self._step_cnt, self._total_steps)
             return
         self._n_step = self._tracker.end_of_episode(achievements)
+
+
+class FrontierDQfD(FrontierMixin, DQfD):
+    """Stage 12 on the stage-10 base, with n driven by the frontier."""
+
+
+class FrontierDQfD03(FrontierMixin, DQfD03):
+    """Stage 12 on the stage-03 base, with n driven by the frontier."""
 
 
 def train_frontier(agent, env, step_num=100_000, log_every=10_000,
@@ -207,16 +223,42 @@ def extra_args(p):
                    help='control arm: pin n and disable the tracker')
     p.add_argument('--bbf-schedule', action='store_true',
                    help="control arm: BBF's step-based anneal, 10 -> 3")
+    p.add_argument('--tier-n', type=str, default=None,
+                   help='n per tier 1..5 as a comma list, e.g. 3,3,5,3,3. '
+                        'Default is the file constant, 10,8,5,3,3')
     p.add_argument('--test-frontier', action='store_true',
                    help='check the tiers, the threshold and monotonicity')
 
 
+def _tier_n(args):
+    if not args.tier_n:
+        return None
+    vals = [int(v) for v in args.tier_n.split(',')]
+    assert len(vals) == 5, '--tier-n wants five values, tiers 1..5'
+    return dict(zip(range(1, 6), vals))
+
+
+def _frontier_extra(args, extra):
+    return dict(extra, frontier_window=args.frontier_window,
+                frontier_threshold=args.frontier_threshold,
+                fixed_n=args.fixed_n, bbf_schedule=args.bbf_schedule,
+                tier_n=_tier_n(args))
+
+
 def build(args, capacity):
     net, buffer, extra = build_12(args, capacity)
-    return net, buffer, dict(extra, frontier_window=args.frontier_window,
-                             frontier_threshold=args.frontier_threshold,
-                             fixed_n=args.fixed_n,
-                             bbf_schedule=args.bbf_schedule)
+    return net, buffer, _frontier_extra(args, extra)
+
+
+def build_base03(args, capacity):
+    net, buffer, extra = build_12_base03(args, capacity)
+    return net, buffer, _frontier_extra(args, extra)
+
+
+BASES = {
+    'stage03': (FrontierDQfD03, build_base03),
+    'stage10': (FrontierDQfD, build),
+}
 
 
 # ------------------------------------------------------------- self-test
@@ -275,6 +317,22 @@ def test_frontier(window=10, threshold=0.20):
           f'{"ok" if mono else "WRONG"}')
     ok &= mono
 
+    # A custom schedule must actually be used. A tracker that fell back to
+    # TIER_N would look identical in the log line and in frontier.jsonl.
+    custom = {1: 3, 2: 3, 3: 5, 4: 3, 5: 3}
+    t4 = FrontierTracker(window=window, threshold=threshold, tier_n=custom)
+    starts_short = t4.n == 3
+    for _ in range(window):
+        t4.end_of_episode(_episode('collect_wood', 'place_table',
+                                   'collect_stone'))
+    # frontier 3 says 5, but n never grows, so it stays at 3.
+    held = t4.frontier == 3 and t4.n == 3
+    print(f'\n--tier-n 3,3,5,3,3: starts at n {t4.n}   {starts_short}   '
+          f'want True')
+    print(f'  frontier {t4.frontier} wants n {custom[3]}, n stays {t4.n}   '
+          f'{held}   want True (monotone)')
+    ok &= starts_short and held
+
     # The BBF control, for the ablation table.
     print(f'\nBBF step-based control, 1M budget')
     bbf = [(s, bbf_n(s, 1_000_000)) for s in (0, 250_000, 500_000, 1_000_000)]
@@ -309,9 +367,10 @@ def main(argv=None):
     import stage_02_dqn.train as s02
     original = s02.train
     s02.train = train_frontier
+    agent_cls, build_fn = BASES[pick_base(argv)]
     try:
-        return stage_02_main(argv, agent_cls=FrontierDQfD, stage_id=STAGE_ID,
-                             extra_args=extra_args, build=build)
+        return stage_02_main(argv, agent_cls=agent_cls, stage_id=STAGE_ID,
+                             extra_args=extra_args, build=build_fn)
     finally:
         s02.train = original
 

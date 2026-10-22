@@ -1,0 +1,27 @@
+$ python stage_12_c3_demonstrations/train.py --test-demos
+margin loss
+  expert action leads by 4   0.00   want 0.00
+  expert action worst by 4   4.80   want 4.80 (4 + 0.8)
+  is_demo all zero           0.00   want 0.00
+
+lambda_e fade, start 200k over 200k steps
+  step       0  1.00   want 1.00  ok
+  step 199,999  1.00   want 1.00  ok
+  step 300,000  0.50   want 0.50  ok
+  step 400,000  0.00   want 0.00  ok
+  step 900,000  0.00   want 0.00  ok
+demos: 4 episodes kept, 0 skipped (need make_stone_pickaxe), 806 transitions protected = 20.1% of the buffer
+
+mechanism 1: loaded before training    True   want True  (806 transitions)
+mechanism 4: every prefix row flagged  True   want True
+mechanism 2: prefix survives the wrap  True   want True  (ptr 1662, floor 806)
+mechanism 3: demos still sampled       True   want True  (mean 9.4% of each batch)
+guard-rail 1: capped at 10%            True   want True  (max 9.4%)
+mechanism 3: bonus survives an update  True   want True  (2.00 -> 1.00, floor 1.0)
+demos: 4 episodes kept, 0 skipped (need make_stone_pickaxe), 806 transitions protected = 20.1% of the buffer
+
+stage-03 base buffer (806 demo transitions)
+  mechanism 2: prefix survives the wrap  True   want True  (ptr 1662, floor 806)
+  mechanism 3: fixed share, every batch  True   want True  (9.4%, cap 9.4%)
+
+PASS

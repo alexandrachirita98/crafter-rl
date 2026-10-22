@@ -1,0 +1,1 @@
+python stage_12_c3_demonstrations/train.py --total-steps 2000 --num-envs 1 --seed 1 --logdir logdir --warmup-steps 500 --buffer-size 5000 --log-every 200 --base stage03 --n-step 3

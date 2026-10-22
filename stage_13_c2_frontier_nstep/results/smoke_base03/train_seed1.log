@@ -1,0 +1,27 @@
+Setting all rngs to seed=1
+stage stage_13_c2_frontier_nstep  seed 1  steps 2,000  envs 1  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/crafter-run-16261/crafter_reward-stage_13_c2_frontier_nstep/1/stats.jsonl
+demos: 4 episodes kept, 0 skipped (need make_stone_pickaxe), 806 transitions protected = 40.3% of the buffer
+[   1][     200], R/ep=  2.10, eps=1.00, loss=     nan, meanQ=    nan, tier=1, n=3,   161 fps
+[   2][     400], R/ep=  2.10, eps=1.00, loss=     nan, meanQ=    nan, tier=1, n=3,   159 fps
+[   3][     600], R/ep=  2.10, eps=1.00, loss=  0.0438, meanQ=  0.021, tier=1, n=3,    54 fps
+[   3][     800], R/ep=  2.10, eps=1.00, loss=  0.2005, meanQ=  0.070, tier=1, n=3,    30 fps
+[   4][    1000], R/ep=  1.60, eps=1.00, loss=  0.0693, meanQ=  0.082, tier=1, n=3,    22 fps
+[   6][    1200], R/ep=  1.60, eps=1.00, loss=  0.1505, meanQ=  0.061, tier=1, n=3,    19 fps
+[   7][    1400], R/ep=  1.53, eps=1.00, loss=  0.0849, meanQ=  0.091, tier=1, n=3,    17 fps
+[   8][    1600], R/ep=  1.35, eps=1.00, loss=  0.0880, meanQ=  0.066, tier=1, n=3,    17 fps
+[  10][    1800], R/ep=  1.40, eps=1.00, loss=  0.1890, meanQ=  0.065, tier=1, n=3,    17 fps
+[  11][    2000], R/ep=  1.50, eps=0.99, loss=  0.0947, meanQ=  0.066, tier=1, n=3,    17 fps
+
+done: 11 episodes in 2.0 min (17 fps), final_eps=0.994
+score over 11 episodes: 1.82%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up              100.0%
+  collect_sapling       45.5%
+  place_plant           45.5%
+  collect_drink         18.2%
+  collect_wood          18.2%
+  make_wood_pickaxe      9.1%
+  place_table            9.1%

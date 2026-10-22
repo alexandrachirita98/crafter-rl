@@ -1,0 +1,24 @@
+Setting all rngs to seed=1
+stage stage_11_c1_achievement_aux  seed 1  steps 2,000  envs 1  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/crafter-run-14889/crafter_reward-stage_11_c1_achievement_aux/1/stats.jsonl
+[   0][     200], R/ep=   nan, eps=1.00, loss=     nan, meanQ=    nan, aux=   nan, acc=nan% (majority nan%),   194 fps
+[   2][     400], R/ep=  1.10, eps=1.00, loss=     nan, meanQ=    nan, aux=   nan, acc=nan% (majority nan%),   160 fps
+[   3][     600], R/ep=  0.77, eps=1.00, loss=  0.0558, meanQ=  0.013, aux= 2.965, acc=62.5% (majority 62.5%),    51 fps
+[   4][     800], R/ep=  0.60, eps=1.00, loss=  0.0991, meanQ=  0.148, aux= 0.684, acc=56.2% (majority 56.2%),    30 fps
+[   5][    1000], R/ep=  0.70, eps=1.00, loss=  0.0498, meanQ=  0.041, aux= 0.697, acc=65.6% (majority 65.6%),    24 fps
+[   6][    1200], R/ep=  0.93, eps=1.00, loss=  0.0066, meanQ=  0.029, aux= 0.575, acc=62.5% (majority 62.5%),    21 fps
+[   8][    1400], R/ep=  0.60, eps=1.00, loss=  0.0317, meanQ=  0.017, aux= 0.415, acc=65.6% (majority 65.6%),    19 fps
+[   9][    1600], R/ep=  0.66, eps=1.00, loss=  0.0339, meanQ=  0.061, aux= 0.892, acc=56.2% (majority 56.2%),    18 fps
+[  10][    1800], R/ep=  0.80, eps=1.00, loss=  0.0062, meanQ=  0.040, aux= 1.006, acc=50.0% (majority 50.0%),    18 fps
+[  11][    2000], R/ep=  0.60, eps=0.99, loss=  0.0497, meanQ=  0.059, aux= 0.758, acc=53.1% (majority 53.1%),    17 fps
+
+done: 11 episodes in 1.9 min (17 fps), final_eps=0.994
+score over 11 episodes: 1.05%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up               90.9%
+  collect_sapling       27.3%
+  place_plant           27.3%
+  collect_drink          9.1%
+  collect_wood           9.1%

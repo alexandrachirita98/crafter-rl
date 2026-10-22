@@ -51,11 +51,15 @@ from stage_02_dqn.train import DEVICE, N_ACTIONS, main as stage_02_main
 from stage_10_drq_resets.train import random_shift
 from stage_11_c1_achievement_aux.train import (AchievementLabeller,
                                                AuxDrQResets,
+                                               AuxNStepDoubleDQN,
+                                               AuxNStepMixin,
                                                AuxPrioritizedReplayMemory,
                                                AuxQRDuelingNet,
+                                               N_AUX_CLASSES,
                                                build as build_11,
+                                               build_base03 as build_11_base03,
                                                extra_args as extra_11,
-                                               train_aux)
+                                               pick_base, train_aux)
 
 STAGE_ID = 'stage_12_c3_demonstrations'
 
@@ -146,6 +150,60 @@ class DemoReplayMemory(AuxPrioritizedReplayMemory):
         idx = idx.copy()
         idx[drop] = np.random.randint(self._floor, self._len, len(drop))
         return idx
+
+
+class DemoUniformReplayMemory(AuxNStepMixin):
+    """A ring of eight-tuples, a protected prefix, and a fixed demo share.
+
+    Mechanisms 1, 2 and the cap are the same as above. Mechanism 3 cannot be
+    a priority bonus here -- there is no sum-tree on the stage-03 base -- so
+    it becomes a fixed demo share per batch: demo_cap of every batch is drawn
+    from the protected prefix, for the whole run. Permanent by construction,
+    and it is what the 10% cap was already enforcing from above. A deliberate
+    deviation from Hester et al.; it belongs in the write-up.
+    """
+
+    def __init__(self, size, batch_size, demo_cap=0.1):
+        self._buffer = [None] * size
+        self._size = size
+        self._ptr = 0
+        self._len = 0
+        self._batch_size = batch_size
+        self._floor = 0          # mechanism 2: the ring never wraps below this
+        self._demo_cap = demo_cap
+
+    def __len__(self):
+        return self._len
+
+    def push(self, transition):
+        if len(transition) == 7:            # an online seven-tuple
+            transition = (*transition, False)
+        self._buffer[self._ptr] = transition
+        self._ptr += 1
+        if self._ptr >= self._size:
+            self._ptr = self._floor         # never wrap over the demos
+        self._len = min(self._len + 1, self._size)
+
+    def protect_prefix(self, n_demo):
+        self._floor = n_demo
+        self._ptr = n_demo
+
+    def sample(self):
+        B = self._batch_size
+        if self._len <= self._floor:
+            # Only demos stored so far -- a short smoke test, or the n-step
+            # window still holding everything back at the end of warmup.
+            idx = np.random.randint(0, max(self._len, 1), B)
+        else:
+            k = min(int(round(self._demo_cap * B)), self._floor)
+            idx = np.concatenate([
+                np.random.randint(0, self._floor, k),
+                np.random.randint(self._floor, self._len, B - k)])
+        rows = [self._buffer[i] for i in idx]
+        cols = self._unpack([r[:7] for r in rows])
+        is_demo = torch.tensor([float(r[7]) for r in rows],
+                               dtype=torch.float32).to(DEVICE)
+        return (*cols, is_demo)
 
 
 # ----------------------------------------------------------- 2. the loader
@@ -325,6 +383,61 @@ class DQfD(AuxDrQResets):
             self.aux_major = (labels == NONE_SOON).float().mean().item()
 
 
+class DQfD03(AuxNStepDoubleDQN):
+    """Stage 12 on the stage-03 base. The same four mechanisms, scalar Q.
+
+    Differences from DQfD, all of them subtractions: no importance weights,
+    no priority update, no random shift, and the margin reads q directly
+    instead of a mean over quantiles.
+    """
+
+    def __init__(self, *args, demo_margin=0.8, lambda_e=1.0,
+                 demo_fade_start=200_000, demo_fade_steps=200_000, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._margin = demo_margin
+        self._lambda_e = lambda_e
+        self._fade_start = demo_fade_start
+        self._fade_steps = demo_fade_steps
+        self.margin_loss_val = float('nan')
+        self.demo_frac = float('nan')
+
+    def _update(self, states, actions, rewards, states_, mask, n, labels,
+                is_demo):
+        with torch.no_grad():
+            actions_ = self._estimator(states_).argmax(1, keepdim=True)
+            qsa_ = self._target_estimator(states_).gather(1, actions_)
+        feats = self._estimator.trunk(states)
+        q = self._estimator.head(feats)             # (B, A), already scalar
+        qsa = q.gather(1, actions)
+        target = rewards + (self._gamma ** n) * qsa_ * mask
+        rl_loss = (qsa - target).pow(2).mean()
+
+        logits = self._estimator.aux(feats)
+        aux_loss = F.cross_entropy(logits, labels, weight=self._aux_weight)
+
+        lam_e = lambda_e(self._step_cnt, self._lambda_e, self._fade_start,
+                         self._fade_steps)
+        if lam_e > 0 and is_demo.sum() > 0:
+            m_loss = margin_loss(q, actions, is_demo, self._margin)
+        else:
+            m_loss = torch.zeros((), device=DEVICE)
+
+        self._optimizer.zero_grad()
+        (rl_loss + self._lambda_aux * aux_loss + lam_e * m_loss).backward()
+        self._optimizer.step()
+
+        self.loss = rl_loss.item()
+        self.mean_q = qsa.mean().item()
+        self.aux_loss = aux_loss.item()
+        self.margin_loss_val = m_loss.item()
+        self.demo_frac = is_demo.mean().item()
+        with torch.no_grad():
+            self.aux_acc = (logits.argmax(1) == labels).float().mean().item()
+            self.aux_major = (
+                labels.bincount(minlength=N_AUX_CLASSES).max().item()
+                / labels.numel())
+
+
 def extra_args(p):
     extra_11(p)
     p.add_argument('--demo-dir', type=str, default='demos')
@@ -367,6 +480,35 @@ def build(args, capacity):
                              lambda_e=args.lambda_e,
                              demo_fade_start=args.demo_fade_start,
                              demo_fade_steps=args.demo_fade_steps)
+
+
+def build_base03(args, capacity):
+    """Stage 11's stage-03 net, with the protected uniform buffer.
+
+    No add_priority_bonus: mechanism 3 is the fixed demo share instead, so
+    --demo-priority-bonus is accepted and ignored on this base.
+    """
+    net, _, extra = build_11_base03(args, capacity)
+    buffer = DemoUniformReplayMemory(size=capacity,
+                                     batch_size=args.batch_size,
+                                     demo_cap=args.demo_cap)
+    if not args.no_demos:
+        load_demos(buffer, args.demo_dir, n_step=args.n_step,
+                   gamma=args.gamma, horizon=args.aux_horizon,
+                   min_achievement=args.demo_min_achievement)
+    else:
+        print('demos: DISABLED (--no-demos), this is the control arm',
+              flush=True)
+    return net, buffer, dict(extra, demo_margin=args.demo_margin,
+                             lambda_e=args.lambda_e,
+                             demo_fade_start=args.demo_fade_start,
+                             demo_fade_steps=args.demo_fade_steps)
+
+
+BASES = {
+    'stage03': (DQfD03, build_base03),
+    'stage10': (DQfD, build),
+}
 
 
 # ------------------------------------------------------------- self-test
@@ -464,6 +606,28 @@ def test_demos():
           f'({before.mean():.2f} -> {after.mean():.2f}, floor 1.0)')
     ok &= survives
 
+    # -- the same four, on the stage-03 base's buffer ----------------------
+    # Mechanism 3 is a fixed share here, not a bonus, so it needs its own
+    # evidence: a share that is both nonzero and exactly at the cap.
+    np.random.seed(0)
+    ubuf = DemoUniformReplayMemory(size=capacity, batch_size=batch,
+                                   demo_cap=0.1)
+    n_demo_u = load_demos(ubuf, demo_dir, n_step=3, gamma=0.99, horizon=20)
+    uhead = [ubuf._buffer[i] for i in range(min(5, n_demo_u))]
+    for _ in range(capacity + 50):
+        ubuf.push(dummy)
+    u_intact = all(ubuf._buffer[i][7] for i in range(n_demo_u))
+    u_same = all(ubuf._buffer[i][1] == uhead[i][1] for i in range(len(uhead)))
+    ufracs = [ubuf.sample()[7].mean().item() for _ in range(30)]
+    want_share = min(int(round(0.1 * batch)), n_demo_u) / batch
+    u_exact = all(abs(f - want_share) < 1e-9 for f in ufracs)
+    print(f'\nstage-03 base buffer ({n_demo_u:,} demo transitions)')
+    print(f'  mechanism 2: prefix survives the wrap  {u_intact and u_same}'
+          f'   want True  (ptr {ubuf._ptr}, floor {ubuf._floor})')
+    print(f'  mechanism 3: fixed share, every batch  {u_exact}   want True  '
+          f'({ufracs[0]:.1%}, cap {want_share:.1%})')
+    ok &= u_intact and u_same and u_exact
+
     print('\nPASS' if ok else '\nFAIL')
     return 0 if ok else 1
 
@@ -483,9 +647,10 @@ def main(argv=None):
     import stage_02_dqn.train as s02
     original = s02.train
     s02.train = train_aux
+    agent_cls, build_fn = BASES[pick_base(argv)]
     try:
-        return stage_02_main(argv, agent_cls=DQfD, stage_id=STAGE_ID,
-                             extra_args=extra_args, build=build)
+        return stage_02_main(argv, agent_cls=agent_cls, stage_id=STAGE_ID,
+                             extra_args=extra_args, build=build_fn)
     finally:
         s02.train = original
 

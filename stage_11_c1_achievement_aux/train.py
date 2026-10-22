@@ -30,6 +30,7 @@ Run:
 """
 
 import pathlib
+import random
 import sys
 import time
 from collections import deque
@@ -45,7 +46,9 @@ from common.env import bootstrap_mask
 from common.masking import legal_mask
 from common.metrics import ACHIEVEMENTS
 from common.replay import beta_by_step
-from stage_02_dqn.train import DEVICE, N_ACTIONS, _to_tensor, main as stage_02_main
+from stage_02_dqn.train import (DEVICE, N_ACTIONS, _to_tensor, get_estimator,
+                                main as stage_02_main)
+from stage_04_nstep.train import NStepDoubleDQN, NStepReplayMemory
 from stage_06_qrdqn.train import QRDuelingNet
 from stage_08_per.train import PrioritizedReplayMemory
 from stage_10_drq_resets.train import (DrQResets, build as build_10,
@@ -139,6 +142,35 @@ class AuxQRDuelingNet(QRDuelingNet):
         return self.aux(self.trunk(x))
 
 
+class AuxQNet(nn.Module):
+    """Stage 02's net with a 23-way head on its penultimate features.
+
+    AuxQRDuelingNet puts the head on the conv flatten -- 57,600 wide at
+    stride 1, so that head alone is 14,751,767 params against 22,186,893 for
+    the whole net. Here it sits after the Linear(flat, lin) + ReLU instead,
+    so the shared representation is conv + first linear and the head is
+    lin x 256 x 23: 22,551 params inside 3,712,648. forward() is exactly
+    get_estimator's, so the RL path is stage 02's.
+    """
+
+    def __init__(self, action_num, lin_size=64, stride=1, aux_hidden=256):
+        super().__init__()
+        net = get_estimator(action_num, lin_size=lin_size, stride=stride)
+        # Sequential slicing returns a new container over the SAME modules,
+        # so trunk and head share parameters with net; nothing is copied.
+        self.trunk = net[:-1]           # conv -> Linear(flat, lin) -> ReLU
+        self.head = net[-1]             # Linear(lin, action_num)
+        self.aux = nn.Sequential(
+            nn.Linear(lin_size, aux_hidden), nn.ReLU(inplace=True),
+            nn.Linear(aux_hidden, N_AUX_CLASSES)).to(DEVICE)
+
+    def forward(self, x):
+        return self.head(self.trunk(x))
+
+    def aux_logits(self, x):
+        return self.aux(self.trunk(x))
+
+
 # -------------------------------------------------------- 3. the buffers
 
 
@@ -170,11 +202,28 @@ class AuxPrioritizedReplayMemory(AuxNStepMixin, PrioritizedReplayMemory):
         return (*cols, idx, weights)
 
 
+class AuxNStepReplayMemory(AuxNStepMixin, NStepReplayMemory):
+    """Stage 04's deque of six-tuples, carrying the label as a seventh field.
+
+    Uniform sampling; no tree, no weights. _unpack already knows the seven
+    columns.
+    """
+
+    def sample(self):
+        return self._unpack(random.sample(self._buffer, self._batch_size))
+
+
 # ---------------------------------------------------------- 4. the agent
 
 
-class AuxDrQResets(DrQResets):
-    """Stage 10, plus the auxiliary loss on the shared trunk."""
+class AuxMixin:
+    """The labeller, and the routing of stage 04's emitted rows through it.
+
+    Base-independent: everything here touches _windows, _buffer and
+    _step_cnt, which every agent from stage 04 on has. The RL loss stays in
+    the subclass, so the same labelling serves the quantile base and the
+    scalar one.
+    """
 
     def __init__(self, *args, lambda_aux=0.1, aux_horizon=100,
                  aux_none_weight=0.1, aux_wake_weight=None, **kwargs):
@@ -245,7 +294,9 @@ class AuxDrQResets(DrQResets):
         for payload, label in self._labeller.flush():
             self._buffer.push((*payload, label))
 
-    # -- learning: one extra loss term ------------------------------------
+
+class AuxDrQResets(AuxMixin, DrQResets):
+    """Stage 10, plus the auxiliary loss on the shared trunk."""
 
     def _update(self, states, actions, rewards, states_, mask, n, labels,
                 idx, weights):
@@ -274,6 +325,47 @@ class AuxDrQResets(DrQResets):
             # whichever class is commonest in this batch" -- wake_up, not
             # none_soon, at the default horizon. Taking class 22's share here
             # would understate the bar.
+            self.aux_major = (
+                labels.bincount(minlength=N_AUX_CLASSES).max().item()
+                / labels.numel())
+
+
+class AuxNStepDoubleDQN(AuxMixin, NStepDoubleDQN):
+    """C1 on the stage-03 base: scalar double-Q, n-step window, uniform replay.
+
+    With --n-step 1 and --lambda-aux 0 the RL path is stage 03's _update to
+    the line. One trunk pass feeds both heads, which is the point of sharing
+    the representation.
+    """
+
+    def __init__(self, *args, total_steps=None, **kwargs):
+        # Carried only so stage 13's --bbf-schedule can read it. The stage-10
+        # base gets it from stage 08 (beta annealing); there is no PER here.
+        super().__init__(*args, **kwargs)
+        self._total_steps = total_steps
+
+    def _update(self, states, actions, rewards, states_, mask, n, labels):
+        with torch.no_grad():
+            actions_ = self._estimator(states_).argmax(1, keepdim=True)
+            qsa_ = self._target_estimator(states_).gather(1, actions_)
+        feats = self._estimator.trunk(states)
+        qsa = self._estimator.head(feats).gather(1, actions)
+        # n is (B,1) per sample; see stage 04 on why not gamma ** self._n_step
+        target = rewards + (self._gamma ** n) * qsa_ * mask
+        rl_loss = (qsa - target).pow(2).mean()
+
+        logits = self._estimator.aux(feats)
+        aux_loss = F.cross_entropy(logits, labels, weight=self._aux_weight)
+
+        self._optimizer.zero_grad()
+        (rl_loss + self._lambda_aux * aux_loss).backward()
+        self._optimizer.step()
+
+        self.loss = rl_loss.item()
+        self.mean_q = qsa.mean().item()
+        self.aux_loss = aux_loss.item()
+        with torch.no_grad():
+            self.aux_acc = (logits.argmax(1) == labels).float().mean().item()
             self.aux_major = (
                 labels.bincount(minlength=N_AUX_CLASSES).max().item()
                 / labels.numel())
@@ -339,6 +431,11 @@ def train_aux(agent, env, step_num=100_000, log_every=10_000,
 
 def extra_args(p):
     extra_10(p)
+    p.add_argument('--base', choices=tuple(BASES), default='stage03',
+                   help='stage03: scalar double-DQN + uniform replay, the '
+                        'agent that scores. stage10: the Rainbow stack. '
+                        'The stage-10 flags are accepted and ignored on '
+                        'stage03')
     p.add_argument('--lambda-aux', type=float, default=0.1,
                    help='weight on the auxiliary loss. 0 is the control')
     p.add_argument('--aux-horizon', type=int, default=100,
@@ -363,6 +460,37 @@ def build(args, capacity):
                              aux_horizon=args.aux_horizon,
                              aux_none_weight=args.aux_none_weight,
                              aux_wake_weight=args.aux_wake_weight)
+
+
+def build_base03(args, capacity):
+    """The stage-03 base: plain net, uniform n-step buffer, plus the head.
+
+    Nothing from stages 05-10 is constructed here, so --n-quantiles,
+    --per-alpha, --ez-mu and --reset-every have no effect on this base.
+    """
+    net = AuxQNet(N_ACTIONS, lin_size=args.lin_size, stride=args.stride)
+    buffer = AuxNStepReplayMemory(size=capacity, batch_size=args.batch_size)
+    return net, buffer, dict(n_step=args.n_step,
+                             total_steps=args.total_steps,
+                             lambda_aux=args.lambda_aux,
+                             aux_horizon=args.aux_horizon,
+                             aux_none_weight=args.aux_none_weight,
+                             aux_wake_weight=args.aux_wake_weight)
+
+
+BASES = {
+    'stage03': (AuxNStepDoubleDQN, build_base03),
+    'stage10': (AuxDrQResets, build),
+}
+
+
+def pick_base(argv):
+    """main() needs the agent class before parse_args() has run."""
+    import argparse as _ap
+    p = _ap.ArgumentParser(add_help=False)
+    p.add_argument('--base', choices=tuple(BASES), default='stage03')
+    return p.parse_known_args(argv if argv is not None
+                              else sys.argv[1:])[0].base
 
 
 # ------------------------------------------------------------- self-test
@@ -461,10 +589,80 @@ def test_aux(horizon=3):
     print(f'buffer holds varied labels {labels_vary}   want True')
     ok &= shape_ok and trained and trunk_moved and labels_vary
 
-    # lambda_aux = 0 should be a true control: same code path, no aux
-    # gradient. Not asserted here -- it needs two runs to compare.
-    print(f'\ncontrol check: lambda_aux=0 leaves the RL path identical to '
-          f'stage 10 -- run both and compare the first loss line.')
+    # -- half three: the same, on the stage-03 base ------------------------
+    # The scalar base shares no code with the quantile one below _emit, so
+    # "the labeller works" does not imply "the head trains here too".
+    reset_rng(0)
+    args03 = argparse.Namespace(lin_size=16, stride=2, batch_size=batch,
+                                n_step=3, total_steps=steps, lambda_aux=0.5,
+                                aux_horizon=3, aux_none_weight=0.1,
+                                aux_wake_weight=None)
+    net3, buf3, extra3 = build_base03(args03, capacity)
+    agent3 = AuxNStepDoubleDQN(net3, buf3, O.Adam(net3.parameters(), lr=1e-4),
+                               get_epsilon_schedule(1.0, 0.05, steps),
+                               N_ACTIONS, gamma=0.99, warmup_steps=warmup,
+                               update_steps=2, update_target_steps=10,
+                               **extra3)
+    rng = np.random.RandomState(0)
+    counts = np.zeros(N_ACH, dtype=np.int32)
+    trunk0 = net3.trunk[1].weight.detach().clone()
+    for t in range(steps):
+        if t % 7 == 0:
+            counts = counts.copy(); counts[t % N_ACH] += 1
+        s = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+        s_ = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+        agent3.learn(0, s, t % N_ACTIONS, float(t % 2), s_, 1.0,
+                     counts=counts)
+
+    rl_ok = not np.isnan(agent3.loss)
+    aux_ok = not np.isnan(agent3.aux_loss)
+    moved3 = not torch.equal(trunk0, net3.trunk[1].weight.detach())
+    width = len(buf3._buffer[0]) == 7
+    # The whole reason for this base: stage 02's net, not stage 06's.
+    n_par = sum(q.numel() for q in net3.parameters())
+    print(f'\nstage-03 base')
+    print(f'  rl loss computed         {rl_ok}   want True  '
+          f'({agent3.loss:.3f})')
+    print(f'  aux loss computed        {aux_ok}   want True  '
+          f'({agent3.aux_loss:.3f})')
+    print(f'  gradient reached trunk   {moved3}   want True')
+    print(f'  buffer holds seven-tuples {width}   want True')
+    print(f'  params {n_par:,} (scalar net, no quantiles/dueling)')
+    ok &= rl_ok and aux_ok and moved3 and width
+
+    # -- half four: lambda_aux = 0 is a true control -----------------------
+    # The whole 200k gate rests on this: if any aux gradient leaks through at
+    # lambda_aux=0, "stage 11 reproduces stage 03" is not a claim we can make.
+    reset_rng(0)
+    args0 = argparse.Namespace(lin_size=16, stride=2, batch_size=batch,
+                               n_step=1, total_steps=steps, lambda_aux=0.0,
+                               aux_horizon=3, aux_none_weight=0.1,
+                               aux_wake_weight=None)
+    net0, buf0, extra0 = build_base03(args0, capacity)
+    agent0 = AuxNStepDoubleDQN(net0, buf0, O.Adam(net0.parameters(), lr=1e-3),
+                               get_epsilon_schedule(1.0, 0.05, steps),
+                               N_ACTIONS, gamma=0.99, warmup_steps=warmup,
+                               update_steps=2, update_target_steps=10,
+                               **extra0)
+    aux_w0 = net0.aux[0].weight.detach().clone()
+    head_w0 = net0.head.weight.detach().clone()
+    rng = np.random.RandomState(0)
+    counts = np.zeros(N_ACH, dtype=np.int32)
+    for t in range(steps):
+        if t % 7 == 0:
+            counts = counts.copy(); counts[t % N_ACH] += 1
+        s = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+        s_ = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+        agent0.learn(0, s, t % N_ACTIONS, float(t % 2), s_, 1.0,
+                     counts=counts)
+    aux_frozen = torch.equal(aux_w0, net0.aux[0].weight.detach())
+    q_trains = not torch.equal(head_w0, net0.head.weight.detach())
+    print(f'\nlambda_aux=0 is a true control')
+    print(f'  aux head never moves     {aux_frozen}   want True')
+    print(f'  Q head still trains      {q_trains}   want True')
+    print(f'  aux loss still reported  {not np.isnan(agent0.aux_loss)}   '
+          f'want True ({agent0.aux_loss:.3f}, logged, zero gradient)')
+    ok &= aux_frozen and q_trains
     print('\nPASS' if ok else '\nFAIL')
     return 0 if ok else 1
 
@@ -486,9 +684,10 @@ def main(argv=None):
     import stage_02_dqn.train as s02
     original = s02.train
     s02.train = train_aux               # the loop must pass achievements down
+    agent_cls, build_fn = BASES[pick_base(argv)]
     try:
-        return stage_02_main(argv, agent_cls=AuxDrQResets, stage_id=STAGE_ID,
-                             extra_args=extra_args, build=build)
+        return stage_02_main(argv, agent_cls=agent_cls, stage_id=STAGE_ID,
+                             extra_args=extra_args, build=build_fn)
     finally:
         s02.train = original
 
