@@ -1,0 +1,33 @@
+$ python stage_11_c1_achievement_aux/train.py --test-aux
+labeller, horizon=3, wood at t2 and table at t5
+ step                  label                   want
+   t0           collect_wood           collect_wood ok
+   t1           collect_wood           collect_wood ok
+   t2            place_table            place_table ok
+   t3            place_table            place_table ok
+   t4            place_table            place_table ok
+   t5              none_soon              none_soon ok
+
+flush empties the window   True   want True
+Setting all rngs to seed=0
+
+aux_logits shape           True   want True  (B, 23)
+aux loss computed          True   want True  (3.062)
+gradient reached the trunk True   want True
+buffer holds varied labels True   want True
+Setting all rngs to seed=0
+
+stage-03 base
+  rl loss computed         True   want True  (3.391)
+  aux loss computed        True   want True  (3.160)
+  gradient reached trunk   True   want True
+  buffer holds seven-tuples True   want True
+  params 25,640 (scalar net, no quantiles/dueling)
+Setting all rngs to seed=0
+
+lambda_aux=0 is a true control
+  aux head never moves     True   want True
+  Q head still trains      True   want True
+  aux loss still reported  True   want True (3.173, logged, zero gradient)
+
+PASS

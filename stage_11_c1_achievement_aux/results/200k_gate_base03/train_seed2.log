@@ -1,0 +1,39 @@
+Setting all rngs to seed=2
+stage stage_11_c1_achievement_aux  seed 2  steps 200,000  envs 1  device cuda
+buffer 100,000 transitions = 2.5 GB host RAM
+logging to /tmp/crafter-282379/crafter_reward-stage_11_c1_achievement_aux/2/stats.jsonl
+[  61][   10000], R/ep=  0.80, eps=1.00, loss=     nan, meanQ=    nan, aux=   nan, acc=nan% (majority nan%),   118 fps
+[ 124][   20000], R/ep=  0.70, eps=1.00, loss=     nan, meanQ=    nan, aux=   nan, acc=nan% (majority nan%),   116 fps
+[ 184][   30000], R/ep=  1.50, eps=0.81, loss=  0.0714, meanQ=  0.334, aux= 3.099, acc=0.0% (majority 65.6%),   103 fps
+[ 239][   40000], R/ep=  2.60, eps=0.62, loss=  0.0473, meanQ=  0.771, aux= 3.080, acc=0.0% (majority 50.0%),    99 fps
+[ 297][   50000], R/ep=  2.50, eps=0.43, loss=  0.0188, meanQ=  1.002, aux= 2.985, acc=3.1% (majority 34.4%),    96 fps
+[ 359][   60000], R/ep=  2.60, eps=0.24, loss=  0.0069, meanQ=  1.195, aux= 3.028, acc=0.0% (majority 34.4%),    93 fps
+[ 416][   70000], R/ep=  2.50, eps=0.05, loss=  0.0094, meanQ=  1.405, aux= 3.029, acc=0.0% (majority 40.6%),    91 fps
+[ 474][   80000], R/ep=  2.50, eps=0.05, loss=  0.0052, meanQ=  1.481, aux= 3.031, acc=0.0% (majority 56.2%),    90 fps
+[ 527][   90000], R/ep=  2.40, eps=0.05, loss=  0.0240, meanQ=  1.475, aux= 3.080, acc=0.0% (majority 28.1%),    89 fps
+[ 579][  100000], R/ep=  2.10, eps=0.05, loss=  0.0448, meanQ=  1.572, aux= 2.981, acc=0.0% (majority 43.8%),    89 fps
+[ 631][  110000], R/ep=  2.20, eps=0.05, loss=  0.0266, meanQ=  1.494, aux= 2.935, acc=0.0% (majority 25.0%),    89 fps
+[ 683][  120000], R/ep=  2.30, eps=0.05, loss=  0.0100, meanQ=  1.540, aux= 2.977, acc=0.0% (majority 31.2%),    88 fps
+[ 738][  130000], R/ep=  2.10, eps=0.05, loss=  0.0391, meanQ=  1.461, aux= 3.025, acc=0.0% (majority 37.5%),    88 fps
+[ 793][  140000], R/ep=  1.70, eps=0.05, loss=  0.0145, meanQ=  1.311, aux= 2.920, acc=0.0% (majority 37.5%),    88 fps
+[ 851][  150000], R/ep=  1.20, eps=0.05, loss=  0.0050, meanQ=  1.414, aux= 2.841, acc=0.0% (majority 46.9%),    87 fps
+[ 906][  160000], R/ep=  2.80, eps=0.05, loss=  0.0142, meanQ=  1.651, aux= 2.928, acc=0.0% (majority 43.8%),    87 fps
+[ 958][  170000], R/ep=  2.10, eps=0.05, loss=  0.0116, meanQ=  1.509, aux= 2.993, acc=3.1% (majority 34.4%),    87 fps
+[1020][  180000], R/ep=  2.70, eps=0.05, loss=  0.0430, meanQ=  1.359, aux= 3.027, acc=0.0% (majority 25.0%),    86 fps
+[1075][  190000], R/ep=  2.70, eps=0.05, loss=  0.0262, meanQ=  1.612, aux= 3.008, acc=0.0% (majority 31.2%),    86 fps
+[1126][  200000], R/ep=  2.20, eps=0.05, loss=  0.0304, meanQ=  1.327, aux= 3.052, acc=0.0% (majority 34.4%),    86 fps
+
+done: 1126 episodes in 38.6 min (86 fps), final_eps=0.050
+score over 1126 episodes: 2.36%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  collect_sapling       89.9%
+  place_plant           70.6%
+  wake_up               65.2%
+  collect_wood          40.1%
+  collect_drink         21.8%
+  eat_cow               10.9%
+  defeat_zombie          6.9%
+  place_table            5.2%
+  make_wood_pickaxe      0.3%
+  make_wood_sword        0.3%

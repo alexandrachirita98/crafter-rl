@@ -1,0 +1,1 @@
+python stage_11_c1_achievement_aux/train.py --total-steps 200000 --num-envs 1 --seed 1 --logdir logdir --base stage03 --n-step 1 --mask --eps-decay-steps 50000
