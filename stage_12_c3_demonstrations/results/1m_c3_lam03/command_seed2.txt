@@ -1,0 +1,1 @@
+python stage_12_c3_demonstrations/train.py --total-steps 1000000 --num-envs 1 --seed 2 --logdir logdir --base stage03 --n-step 1 --lambda-aux 0 --eps-decay-steps 250000 --warmup-steps 5000 --buffer-size 500000 --demo-fade-start 600000 --demo-fade-steps 300000 --lambda-e 0.3
