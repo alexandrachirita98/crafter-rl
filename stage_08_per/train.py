@@ -65,12 +65,13 @@ class PrioritizedReplayMemory:
         p = self._tree.nodes[self._tree.size + idx] / total
         w = (self._len * p) ** -self.beta
         w = w / w.max()                 # Schaul 3.4: normalise by the max
-        s, a, g, s_, m, n = zip(*[self._buffer[i] for i in idx])
+        s, a, g, s_, m, n, lg = zip(*[self._buffer[i] for i in idx])
         col = lambda v, dt: torch.tensor(
             np.asarray(v), dtype=dt).unsqueeze(1).to(DEVICE)
         return (_to_tensor(np.stack(s)), col(a, torch.int64),
                 col(g, torch.float32), _to_tensor(np.stack(s_)),
                 col(m, torch.float32), col(n, torch.float32),
+                torch.from_numpy(np.stack(lg)).to(DEVICE),
                 idx, col(w, torch.float32))
 
     def update_priorities(self, idx, losses):
@@ -86,14 +87,14 @@ class PERQRDQN(MunchausenQRDQN):
         super().__init__(*args, **kwargs)
         self._total_steps = total_steps       # beta anneals over the whole run
 
-    def _update(self, states, actions, rewards, states_, mask, n, idx, weights):
+    def _update(self, states, actions, rewards, states_, mask, n, legal_,
+                idx, weights):
+        self._legal_ = legal_
         self._buffer.beta = beta_by_step(self._step_cnt, self._total_steps)
         pred, per_sample = self._per_sample(states, actions, rewards,
                                             states_, mask, n)
         loss = (weights.squeeze(1) * per_sample).mean()
-        self._optimizer.zero_grad()
-        loss.backward()
-        self._optimizer.step()
+        self._backward(loss)
         # the per-sample quantile loss is the priority, as in Rainbow
         self._buffer.update_priorities(idx, per_sample.detach().cpu().numpy())
         self.loss = loss.item()

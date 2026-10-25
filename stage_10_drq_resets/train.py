@@ -47,11 +47,48 @@ def random_shift(x, pad=4):
     return out.to(torch.uint8)      # the values are still integers; lossless
 
 
+def reset_last_linear(estimator, streams, scope='last'):
+    """Re-initialise a head, and be honest about where the head ends.
+
+    WHY THIS IS NOT "for layer in stream". Each stream here is
+    Linear(flat, lin_size) -> ReLU -> Linear(lin_size, out), and at the
+    default --stride 1 that first layer is Linear(57600, 64). The conv
+    "trunk" above it is three 16-channel convs: 2,528 parameters with a
+    5-pixel receptive field, less than one 7.1-pixel Crafter tile. So the
+    convs are a colour filter and the representation lives in those wide
+    linear layers.
+
+    Measured at --lin-size 64 --stride 1 on the stage-06 quantile net:
+    re-initialising every Linear in both streams touches 7,432,598 of
+    7,435,126 parameters -- 99.97%. That is not a head reset, it is a fresh
+    network with a warm buffer, and Nikishin et al.'s result depends on
+    keeping the encoder. Under Crafter's training-time score the episodes
+    played by that fresh network also count against the run, which is the
+    straightforward reading of why stages 10/10b/10c sit at 2.0, at the
+    random baseline.
+
+    scope='last'  -> only the output Linear of each stream (the default).
+    scope='all'   -> every Linear, reproducing every run logged before this.
+    """
+    n = 0
+    for stream in streams:
+        linears = [m for m in stream if isinstance(m, nn.Linear)]
+        chosen = linears[-1:] if scope == 'last' else linears
+        for layer in chosen:
+            layer.reset_parameters()
+            n += layer.weight.numel() + (
+                layer.bias.numel() if layer.bias is not None else 0)
+    total = sum(p.numel() for p in estimator.parameters())
+    return n, total
+
+
 class DrQResets(EzGreedy):
 
-    def __init__(self, *args, reset_every=100_000, **kwargs):
+    def __init__(self, *args, reset_every=100_000, reset_scope='last',
+                 **kwargs):
         super().__init__(*args, **kwargs)
         self._reset_every = reset_every
+        self._reset_scope = reset_scope
 
     def _per_sample(self, states, actions, rewards, states_, mask, n):
         # independent shifts for the online input and the target input
@@ -65,27 +102,33 @@ class DrQResets(EzGreedy):
             self._reset_head()
 
     def _reset_head(self):
-        """Re-init the V and A streams. The trunk and the buffer stay."""
-        for stream in (self._estimator.value, self._estimator.adv):
-            for layer in stream:
-                if isinstance(layer, nn.Linear):
-                    layer.reset_parameters()
+        """Re-init the output layer of each stream. Everything else stays."""
+        n, total = reset_last_linear(
+            self._estimator,
+            (self._estimator.value, self._estimator.adv),
+            self._reset_scope)
         self._target_estimator.load_state_dict(self._estimator.state_dict())
         self._optimizer.state.clear()   # Adam's moments belong to the old head
-        print(f'[reset] head re-initialised at step {self._step_cnt}',
-              flush=True)
+        print(f'[reset] head re-initialised at step {self._step_cnt}: '
+              f'{n:,} of {total:,} params ({100 * n / total:.2f}%), '
+              f'scope={self._reset_scope}', flush=True)
 
 
 def extra_args(p):
     extra_09(p)
     p.add_argument('--reset-every', type=int, default=100_000)
+    p.add_argument('--reset-scope', choices=('last', 'all'), default='last',
+                   help="which Linears a reset re-initialises. 'all' is what "
+                        'every run logged before this flag did, and at '
+                        '--stride 1 that is 99.97%% of the net, not a head')
     p.add_argument('--test-drq', action='store_true',
                    help='check the shift and one head reset, then exit')
 
 
 def build(args, capacity):
     net, buffer, extra = build_09(args, capacity)
-    return net, buffer, dict(extra, reset_every=args.reset_every)
+    return net, buffer, dict(extra, reset_every=args.reset_every,
+                             reset_scope=args.reset_scope)
 
 
 # ------------------------------------------------------------- self-test
@@ -117,7 +160,8 @@ def test_drq(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
     args = argparse.Namespace(lin_size=16, stride=2, batch_size=batch,
                               n_step=3, n_quantiles=11, per_alpha=0.5,
                               total_steps=steps, ez_mu=2.0, ez_max_repeat=100,
-                              reset_every=reset_every)
+                              reset_every=reset_every,
+                              reset_scope='last')
     net, buffer, extra = build(args, capacity)
     agent = DrQResets(net, buffer, O.Adam(net.parameters(), lr=1e-4),
                       get_epsilon_schedule(1.0, 0.05, steps), N_ACTIONS,

@@ -37,15 +37,17 @@ Q_SPREAD = 2.0
 class MunchausenDoubleDQN(DoubleDQN):
     """Stage 03 with the Munchausen bonus and a soft bootstrap. Scalar M-DQN."""
 
-    def _update(self, states, actions, rewards, states_, mask):
+    def _update(self, states, actions, rewards, states_, mask, legal_):
+        # legal_ goes unused: the Munchausen bootstrap is an expectation under
+        # pi, not an argmax, so masking it would mean renormalising the
+        # softmax over the legal set -- a different change from stage 03's.
+        del legal_
         with torch.no_grad():
             target_qsa = self._target(states, actions, rewards, states_, mask)
         qsa = self._estimator(states).gather(1, actions)
 
-        loss = (qsa - target_qsa).pow(2).mean()
-        self._optimizer.zero_grad()
-        loss.backward()
-        self._optimizer.step()
+        loss = self._td_loss(qsa, target_qsa)
+        self._backward(loss)
         self.loss = loss.item()
         self.mean_q = qsa.mean().item()
 

@@ -11,8 +11,10 @@ The lab's code, adapted where Crafter needs it:
   - ReplayMemory stores uint8 numpy frames; the lab's per-step GPU tensors
     don't scale to 1M.
 
-MSE loss, no gradient clipping and the biased max target are the lab's and are
-left alone -- stage 03 replaces the target, later stages the loss.
+The biased max target is the lab's and is left alone -- stage 03 replaces it.
+MSE and no clipping were the lab's too, and are still reachable with
+--loss mse --clip-grad 0, which reproduces every run recorded before the
+flags existed; the defaults are now Huber and a norm clip of 10.
 
 Run:
     python stage_02_dqn/train.py --total-steps 200000 --seed 1
@@ -64,14 +66,21 @@ class ReplayMemory:
         self._buffer.append(transition)
 
     def sample(self):
-        """-> states, actions, rewards, states_, mask. Frames are uint8."""
-        s, a, r, s_, m = zip(*random.sample(self._buffer, self._batch_size))
+        """-> states, actions, rewards, states_, mask, legal_. Frames uint8.
+
+        legal_ is the (B,17) legal-action mask of the NEXT state, for masking
+        the bootstrap. It is all-ones when the run is unmasked, which makes
+        the masked term a no-op and keeps an unmasked run bit-identical.
+        """
+        s, a, r, s_, m, lg = zip(
+            *random.sample(self._buffer, self._batch_size))
         return (
             _to_tensor(np.stack(s)),
             torch.tensor(a, dtype=torch.int64).unsqueeze(1).to(DEVICE),
             torch.tensor(r, dtype=torch.float32).unsqueeze(1).to(DEVICE),
             _to_tensor(np.stack(s_)),
             torch.tensor(m, dtype=torch.float32).unsqueeze(1).to(DEVICE),
+            torch.from_numpy(np.stack(lg)).to(DEVICE),
         )
 
     def __len__(self):
@@ -188,6 +197,8 @@ class DQN:
         update_target_steps=10,
         warmup_steps=100,
         num_envs=1,
+        loss_kind='huber',
+        clip_grad=10.0,
     ):
         self._estimator = estimator
         self._target_estimator = deepcopy(estimator)
@@ -200,6 +211,14 @@ class DQN:
         self._update_target_steps = update_target_steps
         self._warmup_steps = warmup_steps
         self._num_envs = num_envs
+        self._loss_kind = loss_kind
+        self._clip_grad = clip_grad
+        # state_'s legal mask for the batch being updated. The quantile
+        # stages take their argmax inside _target_quantiles, several
+        # overrides deep, and threading an extra positional through all of
+        # them is how a stage ends up masking with the WRONG batch's mask.
+        # _update sets this; the argmax sites read it. None means all-ones.
+        self._legal_ = None
         self._step_cnt = 0
         # for the log line; NaN until the first gradient step
         self.loss = float('nan')
@@ -241,11 +260,17 @@ class DQN:
                 actions[greedy] = qvals.argmax(1).cpu().numpy()
         return actions
 
-    def learn(self, i, state, action, reward, state_, mask):
+    def learn(self, i, state, action, reward, state_, mask, legal_=None):
         """`i` is which env the transition came from. Stages that keep
         per-trajectory state (04's n-step window, 09's repeat walk) index by
-        it; the replay buffer itself does not care."""
-        self._store(i, state, action, reward, state_, mask)
+        it; the replay buffer itself does not care.
+
+        legal_ is state_'s legal-action mask, stored so _update can mask the
+        bootstrap. None means unmasked and becomes all-ones.
+        """
+        if legal_ is None:
+            legal_ = np.ones(self._action_num, dtype=np.float32)
+        self._store(i, state, action, reward, state_, mask, legal_)
 
         if self._step_cnt < self._warmup_steps:
             self._step_cnt += 1
@@ -262,33 +287,81 @@ class DQN:
 
         self._step_cnt += 1
 
-    def _store(self, i, state, action, reward, state_, mask):
+    def _store(self, i, state, action, reward, state_, mask, legal_):
         """One-step: push as-is. Stage 04 keeps an n-step window here."""
         del i
-        self._buffer.push((state, action, reward, state_, mask))
+        self._buffer.push((state, action, reward, state_, mask, legal_))
 
     def end_episode(self, i):
         """train() calls this when env `i` finishes. One-step does nothing."""
         del i
 
-    def _update(self, states, actions, rewards, states_, mask):
+    def _mask_next(self, qvals):
+        """Mask Q-values at state_ with the stashed next-state legal set.
+
+        getattr, not self._legal_: the stages' self-tests build agents with
+        __new__ and set only the few attributes they exercise, so the stash
+        can legitimately not exist yet.
+        """
+        legal_ = getattr(self, '_legal_', None)
+        if legal_ is None:
+            return qvals
+        return _apply_mask(qvals, legal_)
+
+    def _td_loss(self, qsa, target_qsa):
+        """The regression loss, as chosen by --loss.
+
+        mse is the lab's and reproduces every run recorded before the flag
+        existed. huber is quadratic under 1 and linear above, so an
+        achievement's +1-after-hundreds-of-zeros cannot scale the gradient
+        with the error the way a square does.
+        """
+        if self._loss_kind == 'mse':
+            return (qsa - target_qsa).pow(2).mean()
+        return nn.functional.smooth_l1_loss(qsa, target_qsa)
+
+    def _backward(self, loss, zero_first=True):
+        """One gradient step, clipped. Every stage's _update ends here.
+
+        The clip is on the whole-net norm, not per parameter: the conv trunk
+        is shared by all 17 action-values, so one spiked action-value is what
+        damages the features the other 16 read. 0 disables it and reproduces
+        the pre-flag runs.
+
+        zero_first=False is for the stages that zero the gradient AFTER
+        stepping (11, 12); the clip has to land between backward and step
+        either way, which is the whole reason this is one method.
+        """
+        if zero_first:
+            self._optimizer.zero_grad()
+        loss.backward()
+        if self._clip_grad:
+            nn.utils.clip_grad_norm_(self._estimator.parameters(),
+                                     self._clip_grad)
+        self._optimizer.step()
+        if not zero_first:
+            self._optimizer.zero_grad()
+
+    def _update(self, states, actions, rewards, states_, mask, legal_):
         """Stage 03 overrides this method and nothing else."""
         q_values = self._estimator(states)
         with torch.no_grad():
             q_values_ = self._target_estimator(states_)
 
         qsa = q_values.gather(1, actions)
-        qsa_ = q_values_.max(1, keepdim=True)[0]
+        # Mask before the max. Without this the target maximises over actions
+        # the masked policy can never take, so their Q-values are never
+        # corrected by experience and nothing stops them drifting up -- the
+        # max then tracks whichever unreachable action drifted highest.
+        # All-ones on an unmasked run, so this is a no-op there.
+        qsa_ = _apply_mask(q_values_, legal_).max(1, keepdim=True)[0]
 
         # mask is info['discount']: 0.0 only on death, so a timeout still
         # bootstraps. The lab's (1 - done) would zero it.
         target_qsa = rewards + self._gamma * qsa_ * mask
 
-        loss = (qsa - target_qsa).pow(2).mean()
-
-        self._optimizer.zero_grad()
-        loss.backward()
-        self._optimizer.step()
+        loss = self._td_loss(qsa, target_qsa)
+        self._backward(loss)
 
         self.loss = loss.item()
         self.mean_q = qsa.mean().item()
@@ -349,9 +422,21 @@ def train(agent, env, step_num=100_000, log_every=10_000, use_mask=False):
             # wherever done is set.
             masks = legal_masks(infos, dones)
 
+        # The same masks go to the learner as state_'s legal set, and to the
+        # next agent.step() as the current state's -- state_ IS the next
+        # state. None when unmasked, which learn() reads as all-ones.
         for i in range(num_envs):
-            agent.learn(i, states[i], actions[i], rewards[i], states_[i],
-                        bootstrap_mask(dones[i], infos[i]))
+            # On a TIMEOUT the mask is 1.0, so the target bootstraps off
+            # state_ -- and VecEnv has already replaced state_ with the next
+            # world's first frame. info['final_obs'] is the real one. Costs
+            # nothing today (no logged episode has ever reached the 10,000
+            # cap) and stops being silently wrong when one does.
+            next_state = states_[i]
+            if dones[i] and 'final_obs' in infos[i]:
+                next_state = infos[i]['final_obs']
+            agent.learn(i, states[i], actions[i], rewards[i], next_state,
+                        bootstrap_mask(dones[i], infos[i]),
+                        masks[i] if use_mask else None)
             ep_reward[i] += rewards[i]
             if dones[i]:
                 agent.end_episode(i)
@@ -385,6 +470,11 @@ def parse_args(argv=None, extra_args=None):
     p.add_argument('--total-steps', type=int, default=1_000_000,
                    help='environment steps; the benchmark budget is 1M')
     p.add_argument('--seed', type=int, default=1)
+    p.add_argument('--seed-stride', type=int, default=1,
+                   help='env i gets seed*stride+i. 1 reproduces every run '
+                        'already logged, but makes --seed 1 and --seed 2 '
+                        'share 15 of 16 worlds at 16 envs; pass 16 (or '
+                        'num-envs) for disjoint seeds')
     p.add_argument('--num-envs', type=int, default=1,
                    help='parallel Crafter envs sharing one replay buffer and '
                         'one net. 1 reproduces stages 02-10 exactly as run. '
@@ -409,6 +499,13 @@ def parse_args(argv=None, extra_args=None):
                    help="the lab's 1e-3 diverges on a 64x64 input")
     p.add_argument('--adam-eps', type=float, default=1e-4,
                    help="the lab's value")
+    p.add_argument('--loss', dest='loss_kind', choices=('huber', 'mse'),
+                   default='huber',
+                   help="mse is the lab's and the pre-fix default; huber "
+                        'bounds the gradient of a sparse-reward spike')
+    p.add_argument('--clip-grad', type=float, default=10.0,
+                   help='max gradient norm; 0 disables, which is what the '
+                        'lab had')
     p.add_argument('--lin-size', type=int, default=64,
                    help="width of the estimator's hidden layer")
     p.add_argument('--stride', type=int, default=1,
@@ -483,7 +580,8 @@ def main(argv=None, agent_cls=DQN, stage_id=STAGE_ID, extra_args=None,
     logdir.mkdir(parents=True, exist_ok=True)
 
     reset_rng(args.seed)
-    env = VecEnv(args.num_envs, logdir=logdir, seed=args.seed)
+    env = VecEnv(args.num_envs, logdir=logdir, seed=args.seed,
+                 seed_stride=args.seed_stride)
 
     capacity = min(args.buffer_size, args.total_steps)
     frame_bytes = int(np.prod(OBS_SHAPE))
@@ -516,6 +614,8 @@ def main(argv=None, agent_cls=DQN, stage_id=STAGE_ID, extra_args=None,
         update_steps=args.update_steps,
         update_target_steps=args.update_target_steps,
         num_envs=args.num_envs,
+        loss_kind=args.loss_kind,
+        clip_grad=args.clip_grad,
         **extra,
     )
 

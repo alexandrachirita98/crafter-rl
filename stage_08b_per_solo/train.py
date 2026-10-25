@@ -18,12 +18,13 @@ import sys
 
 import numpy as np
 import torch
+import torch.nn as nn
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from common.replay import beta_by_step
-from stage_02_dqn.train import (DEVICE, N_ACTIONS, _to_tensor, get_estimator,
-                                main as stage_02_main)
+from stage_02_dqn.train import (DEVICE, N_ACTIONS, _apply_mask, _to_tensor,
+                                get_estimator, main as stage_02_main)
 from stage_03_double.train import DoubleDQN
 from stage_08_per.train import PrioritizedReplayMemory
 
@@ -40,12 +41,14 @@ class OneStepPrioritizedReplayMemory(PrioritizedReplayMemory):
         p = self._tree.nodes[self._tree.size + idx] / total
         w = (self._len * p) ** -self.beta
         w = w / w.max()                 # Schaul 3.4: normalise by the max
-        s, a, r, s_, m = zip(*[self._buffer[i] for i in idx])
+        s, a, r, s_, m, lg = zip(*[self._buffer[i] for i in idx])
         col = lambda v, dt: torch.tensor(
             np.asarray(v), dtype=dt).unsqueeze(1).to(DEVICE)
         return (_to_tensor(np.stack(s)), col(a, torch.int64),
                 col(r, torch.float32), _to_tensor(np.stack(s_)),
-                col(m, torch.float32), idx, col(w, torch.float32))
+                col(m, torch.float32),
+                torch.from_numpy(np.stack(lg)).to(DEVICE),
+                idx, col(w, torch.float32))
 
 
 class PERDoubleDQN(DoubleDQN):
@@ -55,20 +58,25 @@ class PERDoubleDQN(DoubleDQN):
         super().__init__(*args, **kwargs)
         self._total_steps = total_steps       # beta anneals over the whole run
 
-    def _update(self, states, actions, rewards, states_, mask, idx, weights):
+    def _update(self, states, actions, rewards, states_, mask, legal_,
+                idx, weights):
         self._buffer.beta = beta_by_step(self._step_cnt, self._total_steps)
         with torch.no_grad():
-            actions_ = self._estimator(states_).argmax(1, keepdim=True)
+            actions_ = _apply_mask(self._estimator(states_),
+                                   legal_).argmax(1, keepdim=True)
             qsa_ = self._target_estimator(states_).gather(1, actions_)
         qsa = self._estimator(states).gather(1, actions)
         target_qsa = rewards + self._gamma * qsa_ * mask
 
         # per-sample, so the same number can be weighted AND used as priority
         td = qsa - target_qsa
-        loss = (weights * td.pow(2)).mean()
-        self._optimizer.zero_grad()
-        loss.backward()
-        self._optimizer.step()
+        if self._loss_kind == 'mse':
+            per_sample = td.pow(2)
+        else:
+            per_sample = nn.functional.smooth_l1_loss(
+                qsa, target_qsa, reduction='none')
+        loss = (weights * per_sample).mean()
+        self._backward(loss)
 
         self._buffer.update_priorities(
             idx, td.detach().abs().squeeze(1).cpu().numpy())

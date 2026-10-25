@@ -23,18 +23,21 @@ import torch
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from stage_02_dqn.train import DQN, main as stage_02_main
+from stage_02_dqn.train import DQN, _apply_mask, main as stage_02_main
 
 STAGE_ID = 'stage_03_double'
 
 
 class DoubleDQN(DQN):
 
-    def _update(self, states, actions, rewards, states_, mask):
+    def _update(self, states, actions, rewards, states_, mask, legal_):
         # Both lines stay under no_grad: letting the argmax carry gradients
         # backprops through the target and destabilises training silently.
         with torch.no_grad():
-            actions_ = self._estimator(states_).argmax(1, keepdim=True)
+            # The argmax is the online net's here, so the mask goes on it;
+            # all-ones on an unmasked run, so this changes nothing there.
+            actions_ = _apply_mask(self._estimator(states_),
+                                   legal_).argmax(1, keepdim=True)
             q_values_ = self._target_estimator(states_)
         q_values = self._estimator(states)
 
@@ -43,11 +46,8 @@ class DoubleDQN(DQN):
 
         target_qsa = rewards + self._gamma * qsa_ * mask
 
-        loss = (qsa - target_qsa).pow(2).mean()
-
-        self._optimizer.zero_grad()
-        loss.backward()
-        self._optimizer.step()
+        loss = self._td_loss(qsa, target_qsa)
+        self._backward(loss)
 
         self.loss = loss.item()
         self.mean_q = qsa.mean().item()

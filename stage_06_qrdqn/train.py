@@ -97,13 +97,12 @@ class QRDQN(NStepDoubleDQN):
                 actions[greedy] = _apply_mask(q, masks[greedy]).argmax(1).cpu().numpy()
         return actions
 
-    def _update(self, states, actions, rewards, states_, mask, n):
+    def _update(self, states, actions, rewards, states_, mask, n, legal_):
+        self._legal_ = legal_
         pred, per_sample = self._per_sample(states, actions, rewards,
                                             states_, mask, n)
         loss = per_sample.mean()
-        self._optimizer.zero_grad()
-        loss.backward()
-        self._optimizer.step()
+        self._backward(loss)
         self.loss = loss.item()
         self.mean_q = pred.mean().item()
 
@@ -125,7 +124,8 @@ class QRDQN(NStepDoubleDQN):
         Stage 07 replaces this; it needs `states` and `actions`, which this
         version ignores.
         """
-        a_ = self._q(states_).argmax(1)                          # online picks
+        # masked before the argmax; _mask_next is a no-op when unmasked
+        a_ = self._mask_next(self._q(states_)).argmax(1)         # online picks
         idx = a_.view(-1, 1, 1).expand(-1, 1, self._n_quant)
         quant_ = self._target_estimator(states_).gather(1, idx).squeeze(1)
         return rewards + (self._gamma ** n) * mask * quant_       # (B,1) over N

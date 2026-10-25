@@ -36,7 +36,7 @@ from stage_02_dqn.train import (_apply_mask, _mask_or_ones, _to_tensor,
                                 main as stage_02_main)
 from stage_06_qrdqn.train import build as build_06, extra_args as extra_06
 from stage_07_munchausen.train import MunchausenQRDQN
-from stage_10_drq_resets.train import random_shift
+from stage_10_drq_resets.train import random_shift, reset_last_linear
 
 STAGE_ID = 'stage_10c_no_per'
 
@@ -57,12 +57,13 @@ class NoPerStack(MunchausenQRDQN):
     """
 
     def __init__(self, *args, ez_mu=2.0, ez_max_repeat=100,
-                 reset_every=100_000, **kwargs):
+                 reset_every=100_000, reset_scope='last', **kwargs):
         super().__init__(*args, **kwargs)
         self._mu, self._cap = ez_mu, ez_max_repeat
         self._repeat_action = np.zeros(self._num_envs, dtype=np.int64)
         self._repeat_left = np.zeros(self._num_envs, dtype=np.int64)
         self._reset_every = reset_every
+        self._reset_scope = reset_scope
 
     # ---------------------------------------------------- stage 09
 
@@ -119,15 +120,16 @@ class NoPerStack(MunchausenQRDQN):
             self._reset_head()
 
     def _reset_head(self):
-        """Re-init the V and A streams. The trunk and the buffer stay."""
-        for stream in (self._estimator.value, self._estimator.adv):
-            for layer in stream:
-                if isinstance(layer, nn.Linear):
-                    layer.reset_parameters()
+        """Re-init the output layer of each stream. See stage 10 on scope."""
+        n, total = reset_last_linear(
+            self._estimator,
+            (self._estimator.value, self._estimator.adv),
+            self._reset_scope)
         self._target_estimator.load_state_dict(self._estimator.state_dict())
         self._optimizer.state.clear()   # Adam's moments belong to the old head
-        print(f'[reset] head re-initialised at step {self._step_cnt}',
-              flush=True)
+        print(f'[reset] head re-initialised at step {self._step_cnt}: '
+              f'{n:,} of {total:,} params ({100 * n / total:.2f}%), '
+              f'scope={self._reset_scope}', flush=True)
 
 
 def extra_args(p):
@@ -137,6 +139,9 @@ def extra_args(p):
     p.add_argument('--ez-mu', type=float, default=2.0)
     p.add_argument('--ez-max-repeat', type=int, default=100)
     p.add_argument('--reset-every', type=int, default=100_000)
+    p.add_argument('--reset-scope', choices=('last', 'all'), default='last',
+                   help="which Linears a reset re-initialises; 'all' is the "
+                        'pre-flag behaviour. See stage 10')
     p.add_argument('--test-no-per', action='store_true',
                    help='check the MRO, the uniform batch and a reset, then exit')
 
@@ -147,7 +152,8 @@ def build(args, capacity):
     net, buffer, extra = build_06(args, capacity)
     return net, buffer, dict(extra, ez_mu=args.ez_mu,
                              ez_max_repeat=args.ez_max_repeat,
-                             reset_every=args.reset_every)
+                             reset_every=args.reset_every,
+                             reset_scope=args.reset_scope)
 
 
 # ------------------------------------------------------------- self-test
@@ -183,7 +189,8 @@ def test_no_per(steps=40, warmup=20, reset_every=30, capacity=64, batch=8,
     reset_rng(0)
     args = argparse.Namespace(lin_size=16, stride=2, batch_size=batch,
                               n_step=3, n_quantiles=11, ez_mu=2.0,
-                              ez_max_repeat=100, reset_every=reset_every)
+                              ez_max_repeat=100, reset_every=reset_every,
+                              reset_scope='last')
     net, buffer, extra = build(args, capacity)
     agent = NoPerStack(net, buffer, O.Adam(net.parameters(), lr=1e-4),
                        get_epsilon_schedule(1.0, 0.05, steps), N_ACTIONS,
@@ -243,10 +250,10 @@ def test_no_per(steps=40, warmup=20, reset_every=30, capacity=64, batch=8,
 
     walked = repeats > 0
     kept = len(buffer) > 0
-    batch_six = len(buffer.sample()) == 6
+    batch_six = len(buffer.sample()) == 7
     print(f'\nez-greedy committed a walk         {walked}   want True  '
           f'({repeats} frames inside a repeat)')
-    print(f'sample() returns 6 tensors         {batch_six}   want True')
+    print(f'sample() returns 7 tensors         {batch_six}   want True')
     print(f'head reset fired                   {reset_fired}   want True  '
           f'(at step {resets})')
     print(f'buffer kept its data               {kept}   want True  '

@@ -19,9 +19,9 @@ memory for the same trick; the buffer lets us skip that.
 Two implementation notes. The usual recipe indexes labels out of the buffer
 after the fact, but ours is a ring of opaque tuples with no stable index into
 the future, so labels are computed at store time from a lookahead window kept
-alongside stage 04's n-step window. And the tuple grows to seven --
-(s, a, G, s_n, mask, n, y) -- carried by both the n-step deque and the
-prioritised ring.
+alongside stage 04's n-step window. And the tuple grows to eight --
+(s, a, G, s_n, mask, n, legal_, y) -- carried by both the n-step deque
+and the prioritised ring.
 
 Run:
     python stage_11_c1_achievement_aux/train.py --test-aux
@@ -175,15 +175,20 @@ class AuxQNet(nn.Module):
 
 
 class AuxNStepMixin:
-    """Seven-tuples: the stage-04 six plus the aux label."""
+    """Eight-tuples: the stage-04 seven plus the aux label.
+
+    The label stays LAST, so stage 12's `r[:7]` slice still means "everything
+    the RL loss needs" after legal_ joined the payload.
+    """
 
     def _unpack(self, rows):
-        s, a, g, s_, m, n, y = zip(*rows)
+        s, a, g, s_, m, n, lg, y = zip(*rows)
         col = lambda v, dt: torch.tensor(
             np.asarray(v), dtype=dt).unsqueeze(1).to(DEVICE)
         return (_to_tensor(np.stack(s)), col(a, torch.int64),
                 col(g, torch.float32), _to_tensor(np.stack(s_)),
                 col(m, torch.float32), col(n, torch.float32),
+                torch.from_numpy(np.stack(lg)).to(DEVICE),
                 torch.tensor(np.asarray(y), dtype=torch.int64).to(DEVICE))
 
 
@@ -203,9 +208,9 @@ class AuxPrioritizedReplayMemory(AuxNStepMixin, PrioritizedReplayMemory):
 
 
 class AuxNStepReplayMemory(AuxNStepMixin, NStepReplayMemory):
-    """Stage 04's deque of six-tuples, carrying the label as a seventh field.
+    """Stage 04's deque of seven-tuples, carrying the label as an eighth.
 
-    Uniform sampling; no tree, no weights. _unpack already knows the seven
+    Uniform sampling; no tree, no weights. _unpack already knows the eight
     columns.
     """
 
@@ -256,17 +261,25 @@ class AuxMixin:
 
     # -- storing: route stage 04's emitted transitions through the labeller --
 
-    def learn(self, i, state, action, reward, state_, mask, counts=None):
-        """train_aux() passes the achievement counts for this step."""
+    def learn(self, i, state, action, reward, state_, mask, legal_=None,
+              counts=None):
+        """train_aux() passes the achievement counts AT `state`.
+
+        Not at `state_`. The label asks "what unlocks from here", and
+        _label() compares the future against this base, so a base taken after
+        the action has already absorbed that action's own unlock and cannot
+        see it. train_aux holds info['achievements'] back by one step for
+        exactly this reason; see the note there.
+        """
         self._pending_counts = counts
         if self._step_cnt >= self._warmup_steps and len(self._buffer) == 0:
             # Stage 02 sizes warmup against the batch, but the n-step window
             # and the lookahead both hold transitions back, so a short run can
             # end warmup with nothing stored and sample unwritten rows.
-            self._store(i, state, action, reward, state_, mask)
+            self._store(i, state, action, reward, state_, mask, legal_)
             self._step_cnt += 1
             return
-        super().learn(i, state, action, reward, state_, mask)
+        super().learn(i, state, action, reward, state_, mask, legal_)
 
     def _buffer_push(self, transition):
         """Hold stage 04's six-tuple until its label is known, then push."""
@@ -280,11 +293,11 @@ class AuxMixin:
         """Stage 04's _emit, with the push redirected through the labeller."""
         window = self._windows[i]
         G = 0.0
-        for k, (_, _, r, _, _) in enumerate(window):
+        for k, (_, _, r, _, _, _) in enumerate(window):
             G += self._gamma ** k * r
         s0, a0 = window[0][0], window[0][1]
-        _, _, _, s_n, mask_n = window[-1]
-        self._buffer_push((s0, a0, G, s_n, mask_n, len(window)))
+        _, _, _, s_n, mask_n, legal_n = window[-1]
+        self._buffer_push((s0, a0, G, s_n, mask_n, len(window), legal_n))
         window.popleft()
 
     def end_episode(self, i):
@@ -298,8 +311,9 @@ class AuxMixin:
 class AuxDrQResets(AuxMixin, DrQResets):
     """Stage 10, plus the auxiliary loss on the shared trunk."""
 
-    def _update(self, states, actions, rewards, states_, mask, n, labels,
-                idx, weights):
+    def _update(self, states, actions, rewards, states_, mask, n, legal_,
+                labels, idx, weights):
+        self._legal_ = legal_
         self._buffer.beta = beta_by_step(self._step_cnt, self._total_steps)
 
         pred, per_sample = self._per_sample(states, actions, rewards,
@@ -311,9 +325,8 @@ class AuxDrQResets(AuxMixin, DrQResets):
         logits = self._estimator.aux_logits(random_shift(states))
         aux_loss = F.cross_entropy(logits, labels, weight=self._aux_weight)
 
-        (rl_loss + self._lambda_aux * aux_loss).backward()
-        self._optimizer.step()
-        self._optimizer.zero_grad()
+        self._backward(rl_loss + self._lambda_aux * aux_loss,
+                       zero_first=False)
 
         self._buffer.update_priorities(idx, per_sample.detach().cpu().numpy())
         self.loss = rl_loss.item()
@@ -344,22 +357,23 @@ class AuxNStepDoubleDQN(AuxMixin, NStepDoubleDQN):
         super().__init__(*args, **kwargs)
         self._total_steps = total_steps
 
-    def _update(self, states, actions, rewards, states_, mask, n, labels):
+    def _update(self, states, actions, rewards, states_, mask, n, legal_,
+                labels):
+        self._legal_ = legal_
         with torch.no_grad():
-            actions_ = self._estimator(states_).argmax(1, keepdim=True)
+            actions_ = self._mask_next(
+                self._estimator(states_)).argmax(1, keepdim=True)
             qsa_ = self._target_estimator(states_).gather(1, actions_)
         feats = self._estimator.trunk(states)
         qsa = self._estimator.head(feats).gather(1, actions)
         # n is (B,1) per sample; see stage 04 on why not gamma ** self._n_step
         target = rewards + (self._gamma ** n) * qsa_ * mask
-        rl_loss = (qsa - target).pow(2).mean()
+        rl_loss = self._td_loss(qsa, target)
 
         logits = self._estimator.aux(feats)
         aux_loss = F.cross_entropy(logits, labels, weight=self._aux_weight)
 
-        self._optimizer.zero_grad()
-        (rl_loss + self._lambda_aux * aux_loss).backward()
-        self._optimizer.step()
+        self._backward(rl_loss + self._lambda_aux * aux_loss)
 
         self.loss = rl_loss.item()
         self.mean_q = qsa.mean().item()
@@ -393,6 +407,14 @@ def train_aux(agent, env, step_num=100_000, log_every=10_000,
     state, done = env.reset()[0], False
     start = time.time()
     mask = None                     # reset() returns no info
+    # The counts AT `state`, i.e. before this step's action. info carries the
+    # counts after it, so feeding info straight to the labeller makes every
+    # label one step early: the base already contains the unlock the action
+    # just earned, so the state whose own action unlocks something is labelled
+    # "none soon" and the state before it gets the label instead. Measured
+    # with the real labeller at horizon 100. A fresh player has unlocked
+    # nothing, so the episode starts at zeros.
+    counts = np.zeros(len(ACHIEVEMENTS), dtype=np.int32)
 
     for step in range(step_num):
         action = agent.step(state[None], mask)[0]
@@ -400,9 +422,17 @@ def train_aux(agent, env, step_num=100_000, log_every=10_000,
         state_, reward, done, info = state_[0], reward[0], done[0], info[0]
         if use_mask:
             mask = legal_mask(info)[None]
-        agent.learn(0, state, action, reward, state_,
+        # mask is (1,17) for agent.step(); the learner wants the row.
+        # Timeout seam: on the 10,000-step cap the mask is 1.0 and the
+        # target bootstraps off state_, which VecEnv has already replaced
+        # with the next world's first frame. See common/env.py.
+        next_state = info['final_obs'] if (done and 'final_obs' in info) \
+            else state_
+        agent.learn(0, state, action, reward, next_state,
                     bootstrap_mask(done, info),
-                    counts=counts_vector(info))
+                    mask[0] if use_mask else None,
+                    counts=counts)
+        counts = counts_vector(info)
         state = state_
         ep_rewards[N] += reward
 
@@ -413,6 +443,11 @@ def train_aux(agent, env, step_num=100_000, log_every=10_000,
             # start a third episode mid-stream.
             done = False
             mask = None             # new world, new player: nothing owned
+            # Same reason: info was the DYING player's, so its counts
+            # describe a world that no longer exists. The labeller is
+            # already flushed by end_episode, so nothing crosses the seam,
+            # but the next step's base has to start from zero.
+            counts = np.zeros(len(ACHIEVEMENTS), dtype=np.int32)
             ep_rewards.append(0.0)
             N += 1
 
@@ -556,7 +591,8 @@ def test_aux(horizon=3):
     args = argparse.Namespace(lin_size=16, stride=2, batch_size=batch,
                               n_step=3, n_quantiles=11, per_alpha=0.5,
                               total_steps=steps, ez_mu=2.0, ez_max_repeat=100,
-                              reset_every=10_000, lambda_aux=0.5,
+                              reset_every=10_000, reset_scope='last',
+                              lambda_aux=0.5,
                               aux_horizon=3, aux_none_weight=0.1,
                               aux_wake_weight=None)
     net, buffer, extra = build(args, capacity)
@@ -573,14 +609,15 @@ def test_aux(horizon=3):
             counts = counts.copy(); counts[t % N_ACH] += 1
         s = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
         s_ = rng.randint(0, 256, (64, 64, 3), dtype=np.uint8)
-        agent.learn(0, s, t % N_ACTIONS, float(t % 2), s_, 1.0, counts=counts)
+        agent.learn(0, s, t % N_ACTIONS, float(t % 2), s_, 1.0,
+                    counts=counts)
 
     shape_ok = net.aux_logits(
         torch.randint(0, 256, (batch, 3, 64, 64), dtype=torch.uint8,
                       device=DEVICE)).shape == (batch, N_AUX_CLASSES)
     trained = not np.isnan(agent.aux_loss)
     trunk_moved = not torch.equal(trunk0, net.trunk[1].weight.detach())
-    labels_vary = len({row[6] for row in buffer._buffer if row is not None}) > 1
+    labels_vary = len({row[7] for row in buffer._buffer if row is not None}) > 1
     print(f'\naux_logits shape           {shape_ok}   want True  '
           f'(B, {N_AUX_CLASSES})')
     print(f'aux loss computed          {trained}   want True  '
@@ -617,7 +654,7 @@ def test_aux(horizon=3):
     rl_ok = not np.isnan(agent3.loss)
     aux_ok = not np.isnan(agent3.aux_loss)
     moved3 = not torch.equal(trunk0, net3.trunk[1].weight.detach())
-    width = len(buf3._buffer[0]) == 7
+    width = len(buf3._buffer[0]) == 8
     # The whole reason for this base: stage 02's net, not stage 06's.
     n_par = sum(q.numel() for q in net3.parameters())
     print(f'\nstage-03 base')
@@ -626,7 +663,7 @@ def test_aux(horizon=3):
     print(f'  aux loss computed        {aux_ok}   want True  '
           f'({agent3.aux_loss:.3f})')
     print(f'  gradient reached trunk   {moved3}   want True')
-    print(f'  buffer holds seven-tuples {width}   want True')
+    print(f'  buffer holds eight-tuples {width}   want True')
     print(f'  params {n_par:,} (scalar net, no quantiles/dueling)')
     ok &= rl_ok and aux_ok and moved3 and width
 

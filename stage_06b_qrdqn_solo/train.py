@@ -81,13 +81,12 @@ class QRDoubleDQN(DoubleDQN):
                     _to_tensor(states[greedy])).argmax(1).cpu().numpy()
         return actions
 
-    def _update(self, states, actions, rewards, states_, mask):
+    def _update(self, states, actions, rewards, states_, mask, legal_):
+        self._legal_ = legal_
         pred, per_sample = self._per_sample(states, actions, rewards,
                                             states_, mask)
         loss = per_sample.mean()
-        self._optimizer.zero_grad()
-        loss.backward()
-        self._optimizer.step()
+        self._backward(loss)
         self.loss = loss.item()
         self.mean_q = pred.mean().item()
 
@@ -101,7 +100,7 @@ class QRDoubleDQN(DoubleDQN):
 
     def _target_quantiles(self, states, actions, rewards, states_, mask):
         """One-step Double-DQN target, N quantiles wide. gamma, not gamma**n."""
-        a_ = self._q(states_).argmax(1)                          # online picks
+        a_ = self._mask_next(self._q(states_)).argmax(1)         # online picks
         idx = a_.view(-1, 1, 1).expand(-1, 1, self._n_quant)
         quant_ = self._target_estimator(states_).gather(1, idx).squeeze(1)
         return rewards + self._gamma * mask * quant_

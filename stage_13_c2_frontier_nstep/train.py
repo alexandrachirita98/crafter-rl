@@ -49,22 +49,38 @@ from stage_12_c3_demonstrations.train import (DQfD, DQfD03, build as build_12,
 
 STAGE_ID = 'stage_13_c2_frontier_nstep'
 
-# Read off crafter/data.yaml and checked against common.metrics.ACHIEVEMENTS.
-# The assert below earns its keep: a typo here would leave an achievement in
-# no tier at all, and nothing else would complain.
+# Read off crafter/data.yaml's crafting requirements: a tier is what the tier
+# below it unlocks. Depth in the TECH TREE only.
+#
+# THE SURVIVAL ACHIEVEMENTS ARE DELIBERATELY NOT HERE, and that is the fix for
+# the bug this stage shipped with. They used to fill tier 5 alongside
+# collect_diamond, and `wake_up` is unlocked in 73-80% of episodes by every
+# agent in the repo INCLUDING the random one -- a sleeping player wakes up on
+# its own when energy refills (crafter/objects.py:103-108) and `sleep` is one
+# of 17 random buttons. Since a tier counted as reached if ANY of its members
+# did, tier 5 cleared the 20% threshold at the tracker's very first decision.
+# Measured from frontier.jsonl: the only tiers ever recorded across 21,845
+# episodes were 1 and 5, frontier 5 arriving at episode 99, and the
+# monotonicity rule then froze n at 3 forever. Both 1M arms ran fixed n = 3.
+#
+# So SURVIVAL is scored by nothing: it is tracked only to keep the "covers
+# all 22" assert meaningful.
 TIERS = {
-    1: ['collect_wood', 'collect_drink', 'collect_sapling', 'eat_cow'],
-    2: ['place_table', 'make_wood_pickaxe', 'make_wood_sword', 'place_plant'],
+    1: ['collect_wood'],
+    2: ['place_table', 'make_wood_pickaxe', 'make_wood_sword'],
     3: ['collect_stone', 'place_stone', 'make_stone_pickaxe',
         'make_stone_sword'],
-    4: ['collect_coal', 'collect_iron', 'place_furnace',
-        'make_iron_pickaxe', 'make_iron_sword'],
-    5: ['collect_diamond', 'eat_plant', 'defeat_zombie',
-        'defeat_skeleton', 'wake_up'],
+    4: ['collect_coal', 'collect_iron', 'place_furnace'],
+    5: ['make_iron_pickaxe', 'make_iron_sword', 'collect_diamond'],
 }
 TIER_N = {1: 10, 2: 8, 3: 5, 4: 3, 5: 3}
 
-_flat = [name for names in TIERS.values() for name in names]
+# Not gated on the tech tree: available from step 0, or pure survival. None of
+# these can move the frontier.
+SURVIVAL = ['collect_drink', 'collect_sapling', 'eat_cow', 'place_plant',
+            'eat_plant', 'defeat_zombie', 'defeat_skeleton', 'wake_up']
+
+_flat = [name for names in TIERS.values() for name in names] + SURVIVAL
 assert sorted(_flat) == sorted(ACHIEVEMENTS), 'TIERS does not cover the 22'
 
 
@@ -88,12 +104,20 @@ class FrontierTracker:
         self.history.append({k: v > 0 for k, v in achievements.items()})
         if len(self.history) < self.history.maxlen:
             return self.n                    # not enough data yet
+        # Tiers must be cleared IN ORDER: stop at the first one that misses
+        # the threshold rather than taking the deepest that happens to pass.
+        # Taking the deepest let a single lucky collect_coal in a 100-episode
+        # window declare tier 4 while the agent could not reliably place a
+        # table, and the frontier is supposed to mean "this is where the
+        # agent reliably plays", which is only true if everything shallower
+        # is also true.
         frontier = 1
         for tier, names in sorted(TIERS.items()):
             rate = np.mean([any(ep[nm] for nm in names)
                             for ep in self.history])
-            if rate >= self.threshold:       # reached in >= 20% of episodes
-                frontier = tier
+            if rate < self.threshold:        # reached in < 20% of episodes
+                break
+            frontier = tier
         self.frontier = frontier
         # n never grows back. A lucky streak should not undo the sharpening,
         # or n oscillates and training never settles.
@@ -156,8 +180,18 @@ def train_frontier(agent, env, step_num=100_000, log_every=10_000,
     10 because the agent plateaued at tier 2" is only a conclusion if there is
     a curve behind it.
     """
-    logdir = pathlib.Path(getattr(env, '_directory', '.'))
+    # VecEnv has no _directory of its own -- only the per-shard Recorders
+    # inside it do -- so this used to fall through to '.' and every run on
+    # every seed appended to ONE frontier.jsonl in the repo root. The file
+    # there is 21,845 lines from several runs with no run id, so the
+    # per-run curve this stage says it needs was not recoverable from it.
+    # This stage is single-env by construction, so shard0's parent is the
+    # run's own logdir.
+    inner = getattr(env, 'envs', [None])[0]
+    shard = getattr(inner, '_directory', None)
+    logdir = pathlib.Path(shard).parent if shard else pathlib.Path('.')
     flog = (logdir / 'frontier.jsonl').open('a')
+    print(f'frontier log: {logdir / "frontier.jsonl"}', flush=True)
 
     N = 0
     ep_rewards = [0.0]
@@ -166,6 +200,9 @@ def train_frontier(agent, env, step_num=100_000, log_every=10_000,
     state, done = env.reset()[0], False
     start = time.time()
     mask = None                     # reset() returns no info
+    # Counts AT `state`, held back one step. See stage 11's train_aux for why
+    # info's counts are the wrong base for the label.
+    counts = np.zeros(len(ACHIEVEMENTS), dtype=np.int32)
 
     for step in range(step_num):
         action = agent.step(state[None], mask)[0]
@@ -173,9 +210,17 @@ def train_frontier(agent, env, step_num=100_000, log_every=10_000,
         state_, reward, done, info = state_[0], reward[0], done[0], info[0]
         if use_mask:
             mask = legal_mask(info)[None]
-        agent.learn(0, state, action, reward, state_,
+        # mask is (1,17) for agent.step(); the learner wants the row.
+        # Timeout seam: on the 10,000-step cap the mask is 1.0 and the
+        # target bootstraps off state_, which VecEnv has already replaced
+        # with the next world's first frame. See common/env.py.
+        next_state = info['final_obs'] if (done and 'final_obs' in info) \
+            else state_
+        agent.learn(0, state, action, reward, next_state,
                     bootstrap_mask(done, info),
-                    counts=counts_vector(info))
+                    mask[0] if use_mask else None,
+                    counts=counts)
+        counts = counts_vector(info)
         state = state_
         ep_rewards[N] += reward
 
@@ -196,6 +241,7 @@ def train_frontier(agent, env, step_num=100_000, log_every=10_000,
             # frame, so resetting again would discard it.
             done = False
             mask = None             # new world, new player: nothing owned
+            counts = np.zeros(len(ACHIEVEMENTS), dtype=np.int32)
             ep_rewards.append(0.0)
             N += 1
 
@@ -332,6 +378,40 @@ def test_frontier(window=10, threshold=0.20):
     print(f'  frontier {t4.frontier} wants n {custom[3]}, n stays {t4.n}   '
           f'{held}   want True (monotone)')
     ok &= starts_short and held
+
+    # -- the two regressions that shipped, pinned ------------------------
+    # 1. A survival-only agent must stay at tier 1. wake_up used to sit in
+    # tier 5, and random play unlocks it in ~75% of episodes, so this stream
+    # declared tier 5 and froze n at 3 at the first decision. This is THE
+    # assertion the old self-test was missing.
+    # This exact stream is what the 1M runs produced: wake_up, sapling,
+    # plant, wood and drink high, nothing past the table. Under the shipped
+    # tiers it returned (frontier 5, n 3) because wake_up sat in tier 5 --
+    # verified by replaying both rule sets. It must now report tier 1.
+    t5 = FrontierTracker(window=window, threshold=threshold)
+    for _ in range(window):
+        t5.end_of_episode(_episode('wake_up', 'collect_sapling',
+                                   'place_plant', 'collect_wood',
+                                   'collect_drink'))
+    survival_only = t5.frontier == 1 and t5.n == TIER_N[1]
+    print(f'\nthe real 1M stream (survival + wood, no table): frontier '
+          f'{t5.frontier}, n {t5.n}   want 1, {TIER_N[1]}   '
+          f'{"ok" if survival_only else "WRONG"}')
+    print('  (shipped code said frontier 5, n 3 here: wake_up was tier 5 '
+          'and is ~75% even for a RANDOM agent)')
+    ok &= survival_only
+
+    # 2. Tiers must be cleared in order. A deep unlock with nothing beneath
+    # it must not jump the ladder: taking the deepest passing tier read this
+    # as frontier 4.
+    t6 = FrontierTracker(window=window, threshold=threshold)
+    for _ in range(window):
+        t6.end_of_episode(_episode('collect_wood', 'collect_coal'))
+    in_order = t6.frontier == 1
+    print(f'tier 4 in 100% but tier 2/3 in 0%: frontier {t6.frontier}   '
+          f'want 1 (tiers must clear in order)   '
+          f'{"ok" if in_order else "WRONG"}')
+    ok &= in_order
 
     # The BBF control, for the ablation table.
     print(f'\nBBF step-based control, 1M budget')

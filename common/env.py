@@ -93,9 +93,24 @@ class VecEnv:
     Crafter's step() returns the old-gym 4-tuple, so this does too.
     """
 
-    def __init__(self, num_envs, logdir=None, seed=0, length=EPISODE_CAP):
+    def __init__(self, num_envs, logdir=None, seed=0, length=EPISODE_CAP,
+                 seed_stride=1):
+        # SEED OVERLAP BETWEEN "INDEPENDENT" SEEDS. With seed_stride=1, env i
+        # gets seed+i, so --seed 1 runs worlds 1..16 and --seed 2 runs worlds
+        # 2..17: fifteen of sixteen world-generation streams are SHARED
+        # between the two runs we report as two seeds. The policies still
+        # differ (torch/numpy are seeded separately) and the streams drift as
+        # episode counts diverge, but the seeds are less independent than the
+        # label claims, which matters because the measured spread between two
+        # seeds reaches 1.49 points.
+        #
+        # seed_stride=num_envs gives disjoint blocks. It is NOT the default:
+        # it changes world generation, and common/env.py's own rule is that
+        # changing this file invalidates every measurement taken before the
+        # change. Pass --seed-stride 16 on new runs, keep 1 to reproduce old
+        # ones.
         self.envs = [
-            make_env(seed=seed + i,
+            make_env(seed=seed * seed_stride + i,
                      logdir=f'{logdir}/shard{i}' if logdir else None,
                      length=length)
             for i in range(num_envs)
@@ -115,6 +130,17 @@ class VecEnv:
                 # episode; `done` tells the learner not to bootstrap across the
                 # seam, via bootstrap_mask(done, info) on the info we return
                 # here -- which is the dying step's info, not the new one's.
+                #
+                # THE TIMEOUT SEAM. On death that is enough, because mask is 0
+                # and the frame is never bootstrapped from. On the 10,000-step
+                # cap mask is 1.0 and SHOULD be: the game was fine, we stopped
+                # watching. But then the learner bootstraps off the frame
+                # below, which belongs to a freshly generated world. So keep
+                # the real final observation where a caller can find it.
+                # Nothing reads it yet by default -- 0 of 179,295 logged
+                # episodes reached the cap, mean length ~180 -- so this is
+                # recorded rather than acted on, and costs one dict entry.
+                info = dict(info, final_obs=ob)
                 ob = env.reset()
             obs.append(ob)
             rewards.append(reward)

@@ -70,7 +70,7 @@ STAGE_ID = 'stage_12_c3_demonstrations'
 class DemoReplayMemory(AuxPrioritizedReplayMemory):
     """Stage 11's buffer with a protected prefix and an is_demo flag.
 
-    Eight-tuples now: (s, a, G, s_n, mask, n, y, is_demo).
+    Nine-tuples now: (s, a, G, s_n, mask, n, legal_, y, is_demo).
     """
 
     def __init__(self, *args, demo_cap=0.1, **kwargs):
@@ -79,7 +79,7 @@ class DemoReplayMemory(AuxPrioritizedReplayMemory):
         self._demo_cap = demo_cap
 
     def push(self, transition):
-        if len(transition) == 7:            # an online seven-tuple
+        if len(transition) == 8:            # an online eight-tuple
             transition = (*transition, False)
         self._buffer[self._ptr] = transition
         self._tree.update(self._ptr, max(self._tree.max_leaf(), 1.0))
@@ -133,8 +133,8 @@ class DemoReplayMemory(AuxPrioritizedReplayMemory):
         w = (self._len * p) ** -self.beta
         w = w / w.max()
         rows = [self._buffer[i] for i in idx]
-        cols = self._unpack([r[:7] for r in rows])
-        is_demo = torch.tensor([float(r[7]) for r in rows],
+        cols = self._unpack([r[:8] for r in rows])
+        is_demo = torch.tensor([float(r[8]) for r in rows],
                                dtype=torch.float32).to(DEVICE)
         weights = torch.tensor(w, dtype=torch.float32).unsqueeze(1).to(DEVICE)
         return (*cols, is_demo, idx, weights)
@@ -153,7 +153,7 @@ class DemoReplayMemory(AuxPrioritizedReplayMemory):
 
 
 class DemoUniformReplayMemory(AuxNStepMixin):
-    """A ring of eight-tuples, a protected prefix, and a fixed demo share.
+    """A ring of nine-tuples, a protected prefix, and a fixed demo share.
 
     Mechanisms 1, 2 and the cap are the same as above. Mechanism 3 cannot be
     a priority bonus here -- there is no sum-tree on the stage-03 base -- so
@@ -176,7 +176,7 @@ class DemoUniformReplayMemory(AuxNStepMixin):
         return self._len
 
     def push(self, transition):
-        if len(transition) == 7:            # an online seven-tuple
+        if len(transition) == 8:            # an online eight-tuple
             transition = (*transition, False)
         self._buffer[self._ptr] = transition
         self._ptr += 1
@@ -200,8 +200,8 @@ class DemoUniformReplayMemory(AuxNStepMixin):
                 np.random.randint(0, self._floor, k),
                 np.random.randint(self._floor, self._len, B - k)])
         rows = [self._buffer[i] for i in idx]
-        cols = self._unpack([r[:7] for r in rows])
-        is_demo = torch.tensor([float(r[7]) for r in rows],
+        cols = self._unpack([r[:8] for r in rows])
+        is_demo = torch.tensor([float(r[8]) for r in rows],
                                dtype=torch.float32).to(DEVICE)
         return (*cols, is_demo)
 
@@ -254,7 +254,7 @@ def load_demos(buffer, demo_dir, n_step=10, gamma=0.99, horizon=100,
 
 
 def _episode_to_rows(ep, n_step, gamma, horizon):
-    """One .npz -> a list of eight-tuples, via the stage-04 n-step window."""
+    """One .npz -> a list of nine-tuples, via the stage-04 n-step window."""
     images = ep['image']
     actions = ep['action']
     rewards = ep['reward']
@@ -265,25 +265,48 @@ def _episode_to_rows(ep, n_step, gamma, horizon):
     window = deque()
     out = []
 
+    # The recorder stores no inventory or semantic map, so a demo row cannot
+    # be masked. All-ones is the permissive direction, which is the one
+    # common/masking.py picks for anything it cannot be sure about.
+    all_legal = np.ones(N_ACTIONS, dtype=np.float32)
+
     def emit():
         G = sum(gamma ** k * r for k, (_, _, r, _, _) in enumerate(window))
         s0, a0 = window[0][0], window[0][1]
         _, _, _, s_n, mask_n = window[-1]
-        payload = (s0, a0, G, s_n, mask_n, len(window))
+        payload = (s0, a0, G, s_n, mask_n, len(window), all_legal)
         window.popleft()
         return payload
 
-    # The recorder stores T+1 frames for T actions: index 0 is the reset
-    # observation, so transition t is image[t] -> image[t+1].
+    # THE INDEX CONVENTION, which was wrong here and is worth spelling out.
+    # crafter.recorder.EpisodeRecorder.step stores, per step, the action it
+    # was given together with the obs/reward/discount the env returned FOR
+    # that action, and _save then zero-pads the reset entry so every key has
+    # length T+1. So image[k] is the frame AFTER action[k], and index 0 is
+    # padding: action[0]=0, reward[0]=0, discount[0]=0.0 describe nothing.
+    #
+    # The transition starting at image[t] therefore uses action[t+1]:
+    #
+    #     image[t]  --action[t+1]-->  image[t+1],  r = reward[t+1]
+    #
+    # Pairing image[t] with action[t] instead (what this did) hands every row
+    # the action that PRODUCED its state. Measured over the 54 demos: at the
+    # index where a craft achievement first rises, action[k] is the craft
+    # action 162/162 times and action[k+1] never is. The margin loss then
+    # teaches "craft here" at the frame that already shows the tool in the
+    # inventory, and the +1 lands one state late. Nothing raises.
     for t in range(len(actions) - 1):
-        window.append((images[t], int(actions[t]), float(rewards[t]),
-                       images[t + 1], float(discounts[t])))
+        window.append((images[t], int(actions[t + 1]), float(rewards[t + 1]),
+                       images[t + 1], float(discounts[t + 1])))
         emitted = []
-        if discounts[t] == 0.0:
+        if discounts[t + 1] == 0.0:
             while window:
                 emitted.append(emit())
         elif len(window) == n_step:
             emitted.append(emit())
+        # counts[t] is the achievement state AT image[t], which is the label
+        # base stage 11 wants: "what unlocks from here", not "what already
+        # unlocked".
         for payload in emitted:
             for p, y in labeller.push(payload, counts[t]):
                 out.append((*p, y, True))
@@ -343,8 +366,9 @@ class DQfD(AuxDrQResets):
         self.margin_loss_val = float('nan')
         self.demo_frac = float('nan')
 
-    def _update(self, states, actions, rewards, states_, mask, n, labels,
-                is_demo, idx, weights):
+    def _update(self, states, actions, rewards, states_, mask, n, legal_,
+                labels, is_demo, idx, weights):
+        self._legal_ = legal_
         from common.replay import beta_by_step
         self._buffer.beta = beta_by_step(self._step_cnt, self._total_steps)
 
@@ -366,9 +390,8 @@ class DQfD(AuxDrQResets):
         else:
             m_loss = torch.zeros((), device=DEVICE)
 
-        (rl_loss + self._lambda_aux * aux_loss + lam_e * m_loss).backward()
-        self._optimizer.step()
-        self._optimizer.zero_grad()
+        self._backward(rl_loss + self._lambda_aux * aux_loss
+                       + lam_e * m_loss, zero_first=False)
 
         self._buffer.update_priorities(idx, per_sample.detach().cpu().numpy())
         self.loss = rl_loss.item()
@@ -401,16 +424,18 @@ class DQfD03(AuxNStepDoubleDQN):
         self.margin_loss_val = float('nan')
         self.demo_frac = float('nan')
 
-    def _update(self, states, actions, rewards, states_, mask, n, labels,
-                is_demo):
+    def _update(self, states, actions, rewards, states_, mask, n, legal_,
+                labels, is_demo):
+        self._legal_ = legal_
         with torch.no_grad():
-            actions_ = self._estimator(states_).argmax(1, keepdim=True)
+            actions_ = self._mask_next(
+                self._estimator(states_)).argmax(1, keepdim=True)
             qsa_ = self._target_estimator(states_).gather(1, actions_)
         feats = self._estimator.trunk(states)
         q = self._estimator.head(feats)             # (B, A), already scalar
         qsa = q.gather(1, actions)
         target = rewards + (self._gamma ** n) * qsa_ * mask
-        rl_loss = (qsa - target).pow(2).mean()
+        rl_loss = self._td_loss(qsa, target)
 
         logits = self._estimator.aux(feats)
         aux_loss = F.cross_entropy(logits, labels, weight=self._aux_weight)
@@ -422,9 +447,8 @@ class DQfD03(AuxNStepDoubleDQN):
         else:
             m_loss = torch.zeros((), device=DEVICE)
 
-        self._optimizer.zero_grad()
-        (rl_loss + self._lambda_aux * aux_loss + lam_e * m_loss).backward()
-        self._optimizer.step()
+        self._backward(rl_loss + self._lambda_aux * aux_loss
+                       + lam_e * m_loss)
 
         self.loss = rl_loss.item()
         self.mean_q = qsa.mean().item()
@@ -560,7 +584,7 @@ def test_demos():
     buffer.add_priority_bonus(n_demo, 1.0)
 
     loaded = n_demo > 0
-    all_flagged = all(buffer._buffer[i][7] for i in range(n_demo))
+    all_flagged = all(buffer._buffer[i][8] for i in range(n_demo))
     print(f'\nmechanism 1: loaded before training    {loaded}   want True  '
           f'({n_demo:,} transitions)')
     print(f'mechanism 4: every prefix row flagged  {all_flagged}   want True')
@@ -570,10 +594,11 @@ def test_demos():
     # the prefix moved.
     head = [buffer._buffer[i] for i in range(min(5, n_demo))]
     dummy = (np.zeros((64, 64, 3), np.uint8), 0, 0.0,
-             np.zeros((64, 64, 3), np.uint8), 1.0, 1, 22)
+             np.zeros((64, 64, 3), np.uint8), 1.0, 1,
+             np.ones(N_ACTIONS, np.float32), 22, False)
     for _ in range(capacity + 50):
         buffer.push(dummy)
-    intact = all(buffer._buffer[i][7] for i in range(n_demo))
+    intact = all(buffer._buffer[i][8] for i in range(n_demo))
     same = all(buffer._buffer[i][1] == head[i][1] for i in range(len(head)))
     wrapped = buffer._ptr >= n_demo
     print(f'mechanism 2: prefix survives the wrap  {intact and same}   '
@@ -584,7 +609,7 @@ def test_demos():
     fracs = []
     for _ in range(30):
         out = buffer.sample()
-        fracs.append(out[7].mean().item())
+        fracs.append(out[8].mean().item())
     mean_frac = float(np.mean(fracs))
     max_frac = float(np.max(fracs))
     sampled = mean_frac > 0
@@ -616,9 +641,9 @@ def test_demos():
     uhead = [ubuf._buffer[i] for i in range(min(5, n_demo_u))]
     for _ in range(capacity + 50):
         ubuf.push(dummy)
-    u_intact = all(ubuf._buffer[i][7] for i in range(n_demo_u))
+    u_intact = all(ubuf._buffer[i][8] for i in range(n_demo_u))
     u_same = all(ubuf._buffer[i][1] == uhead[i][1] for i in range(len(uhead)))
-    ufracs = [ubuf.sample()[7].mean().item() for _ in range(30)]
+    ufracs = [ubuf.sample()[8].mean().item() for _ in range(30)]
     want_share = min(int(round(0.1 * batch)), n_demo_u) / batch
     u_exact = all(abs(f - want_share) < 1e-9 for f in ufracs)
     print(f'\nstage-03 base buffer ({n_demo_u:,} demo transitions)')

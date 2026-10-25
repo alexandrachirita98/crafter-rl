@@ -28,22 +28,29 @@ import torch
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from stage_02_dqn.train import (DEVICE, N_ACTIONS, ReplayMemory, _to_tensor,
-                                get_estimator, main as stage_02_main)
+from stage_02_dqn.train import (DEVICE, N_ACTIONS, ReplayMemory, _apply_mask,
+                                _to_tensor, get_estimator,
+                                main as stage_02_main)
 from stage_03_double.train import DoubleDQN
 
 STAGE_ID = 'stage_04_nstep'
 
 
 class NStepReplayMemory(ReplayMemory):
-    """The same deque, six-tuples: (s, a, G, s_n, mask, n)."""
+    """The same deque, seven-tuples: (s, a, G, s_n, mask, n, legal_).
+
+    legal_ is last so that every index stage 08's and stage 11's unpackers
+    already rely on stays where it was.
+    """
 
     def sample(self):
-        s, a, g, s_, m, n = zip(*random.sample(self._buffer, self._batch_size))
+        s, a, g, s_, m, n, lg = zip(
+            *random.sample(self._buffer, self._batch_size))
         col = lambda v, dt: torch.tensor(v, dtype=dt).unsqueeze(1).to(DEVICE)
         return (_to_tensor(np.stack(s)), col(a, torch.int64),
                 col(g, torch.float32), _to_tensor(np.stack(s_)),
-                col(m, torch.float32), col(n, torch.float32))
+                col(m, torch.float32), col(n, torch.float32),
+                torch.from_numpy(np.stack(lg)).to(DEVICE))
 
 
 class NStepDoubleDQN(DoubleDQN):
@@ -60,9 +67,11 @@ class NStepDoubleDQN(DoubleDQN):
         # transitions that never happened.
         self._windows = [deque() for _ in range(self._num_envs)]
 
-    def _store(self, i, state, action, reward, state_, mask):
+    def _store(self, i, state, action, reward, state_, mask, legal_=None):
         window = self._windows[i]
-        window.append((state, action, reward, state_, mask))
+        if legal_ is None:
+            legal_ = np.ones(self._action_num, dtype=np.float32)
+        window.append((state, action, reward, state_, mask, legal_))
         if mask == 0.0:                 # died: every open window ends here
             self._flush(i)
         elif len(window) == self._n_step:
@@ -75,20 +84,26 @@ class NStepDoubleDQN(DoubleDQN):
         """Pop env i's oldest step and push its n-step transition."""
         window = self._windows[i]
         G = 0.0
-        for k, (_, _, r, _, _) in enumerate(window):
+        for k, (_, _, r, _, _, _) in enumerate(window):
             G += self._gamma ** k * r
         s0, a0 = window[0][0], window[0][1]
-        _, _, _, s_n, mask_n = window[-1]
-        self._buffer.push((s0, a0, G, s_n, mask_n, len(window)))
+        # legal_ comes from the SAME row as s_n: it is s_n's legal set, and
+        # the bootstrap in _update is taken at s_n.
+        _, _, _, s_n, mask_n, legal_n = window[-1]
+        self._buffer.push((s0, a0, G, s_n, mask_n, len(window), legal_n))
         window.popleft()
 
     def _flush(self, i):
         while self._windows[i]:
             self._emit(i)
 
-    def _update(self, states, actions, rewards, states_, mask, n):
+    def _update(self, states, actions, rewards, states_, mask, n, legal_):
         with torch.no_grad():
-            actions_ = self._estimator(states_).argmax(1, keepdim=True)
+            # Double DQN: the argmax is the online net's, so mask THAT --
+            # an illegal action chosen here is priced by the target net and
+            # lands in the return just the same.
+            q_ = _apply_mask(self._estimator(states_), legal_)
+            actions_ = q_.argmax(1, keepdim=True)
             qsa_ = self._target_estimator(states_).gather(1, actions_)
         qsa = self._estimator(states).gather(1, actions)
 
@@ -98,10 +113,8 @@ class NStepDoubleDQN(DoubleDQN):
         # and it does not crash.
         target_qsa = rewards + (self._gamma ** n) * qsa_ * mask
 
-        loss = (qsa - target_qsa).pow(2).mean()
-        self._optimizer.zero_grad()
-        loss.backward()
-        self._optimizer.step()
+        loss = self._td_loss(qsa, target_qsa)
+        self._backward(loss)
         self.loss = loss.item()
         self.mean_q = qsa.mean().item()
 
@@ -137,6 +150,7 @@ def _stub_agent(gamma, n_step, num_envs):
     agent = NStepDoubleDQN.__new__(NStepDoubleDQN)
     agent._gamma, agent._n_step = gamma, n_step
     agent._num_envs = num_envs
+    agent._action_num = N_ACTIONS
     agent._windows = [deque() for _ in range(num_envs)]
     agent._buffer = _StubBuffer()
     return agent
@@ -212,7 +226,7 @@ def test_nstep(gamma=0.9, n_step=3):
     print(f'{"from":>5} {"G":>6} {"s_n":>5} {"mask":>5} {"n":>3}')
     ok = True
     assert len(agent._buffer.pushed) == len(expected), agent._buffer.pushed
-    for (s0, a, g, sn, m, n), (es0, eg, esn, em, en) in zip(
+    for (s0, a, g, sn, m, n, _), (es0, eg, esn, em, en) in zip(
             agent._buffer.pushed, expected):
         good = (s0 == es0 and abs(g - eg) < 1e-9 and sn == esn
                 and m == em and n == en)

@@ -33,14 +33,16 @@ STAGE_ID = 'stage_10b_drq_resets_solo'
 class DrQResetsDoubleDQN(DoubleDQN):
     """Stage 03 with shifted inputs and a periodically re-initialised head."""
 
-    def __init__(self, *args, reset_every=100_000, **kwargs):
+    def __init__(self, *args, reset_every=100_000, reset_scope='last',
+                 **kwargs):
         super().__init__(*args, **kwargs)
         self._reset_every = reset_every
+        self._reset_scope = reset_scope
 
-    def _update(self, states, actions, rewards, states_, mask):
+    def _update(self, states, actions, rewards, states_, mask, legal_):
         # independent shifts for the online input and the target input
         return super()._update(random_shift(states), actions, rewards,
-                               random_shift(states_), mask)
+                               random_shift(states_), mask, legal_)
 
     def learn(self, *transition):
         super().learn(*transition)
@@ -49,16 +51,23 @@ class DrQResetsDoubleDQN(DoubleDQN):
             self._reset_head()
 
     def _reset_head(self):
-        """Re-init the Linear layers. The conv trunk and the buffer stay.
+        """Re-init the output Linear. The conv trunk and the buffer stay.
 
         Stage 03's estimator is one Sequential, so "the head" is its Linear
         layers; the cumulative stage 10 resets the value/adv streams instead.
+
+        --reset-scope all re-initialises BOTH Linears, which is what every
+        run logged before the flag did. That is 3,687,569 of this net's
+        3,690,097 parameters, because Linear(flat, lin_size) is
+        Linear(57600, 64) at --stride 1 -- so it was a whole-network reset
+        wearing the name of a head reset. See stage 10's reset_last_linear.
         """
+        linears = [m for m in self._estimator if isinstance(m, nn.Linear)]
+        chosen = linears[-1:] if self._reset_scope == 'last' else linears
         n = 0
-        for layer in self._estimator:
-            if isinstance(layer, nn.Linear):
-                layer.reset_parameters()
-                n += 1
+        for layer in chosen:
+            layer.reset_parameters()
+            n += 1
         self._target_estimator.load_state_dict(self._estimator.state_dict())
         self._optimizer.state.clear()   # Adam's moments belong to the old head
         print(f'step {self._step_cnt:>8,}  RESET: re-initialised {n} head '
@@ -72,6 +81,9 @@ AGENT_CLS = DrQResetsDoubleDQN
 
 def extra_args(p):
     p.add_argument('--reset-every', type=int, default=100_000)
+    p.add_argument('--reset-scope', choices=('last', 'all'), default='last',
+                   help="which Linears a reset re-initialises; 'all' is the "
+                        'pre-flag behaviour. See stage 10')
     p.add_argument('--test-solo', action='store_true',
                    help='check the isolation, the shift and one reset, then exit')
 
@@ -79,7 +91,8 @@ def extra_args(p):
 def build(args, capacity):
     net = get_estimator(N_ACTIONS, lin_size=args.lin_size, stride=args.stride)
     buffer = ReplayMemory(size=capacity, batch_size=args.batch_size)
-    return net, buffer, {'reset_every': args.reset_every}
+    return net, buffer, {'reset_every': args.reset_every,
+                         'reset_scope': args.reset_scope}
 
 
 # ------------------------------------------------------------- self-test
@@ -107,7 +120,7 @@ def test_solo(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
     print(f'shift actually moves pixels        {moved}   want True')
 
     args = argparse.Namespace(lin_size=16, stride=2, batch_size=batch,
-                              reset_every=reset_every)
+                              reset_every=reset_every, reset_scope='last')
     net, buffer, extra = build(args, capacity)
     agent = AGENT_CLS(net, buffer, O.Adam(net.parameters(), lr=1e-4),
                       get_epsilon_schedule(1.0, 0.05, steps), N_ACTIONS,
@@ -161,9 +174,11 @@ def test_solo(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
           f'want {steps // reset_every}')
     print(f'_reset_head touches {n_layers} Linear layer(s), all '
           f'{len(conv)} convs untouched {trunk_kept}   want True')
+    print(f'  scope=last, so the wide Linear(flat, lin) is KEPT -- the '
+          f'representation lives there, not in the 2,528-param conv stack')
 
     ok = (no_nstep and no_quant and shift_ok and moved and head_changed
-          and synced and buf_at_reset > 0 and trunk_kept and n_layers == 2
+          and synced and buf_at_reset > 0 and trunk_kept and n_layers == 1
           and len(fired) == steps // reset_every)
     print('\nPASS' if ok else '\nFAIL')
     return 0 if ok else 1
