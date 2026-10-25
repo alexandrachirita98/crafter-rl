@@ -1,0 +1,1 @@
+python stage_13_c2_frontier_nstep/train.py --total-steps 1000000 --num-envs 1 --seed 1 --logdir logdir --base stage03 --lambda-aux 0 --no-demos --eps-decay-steps 250000 --warmup-steps 5000 --buffer-size 500000 --tier-n 3,3,5,3,3

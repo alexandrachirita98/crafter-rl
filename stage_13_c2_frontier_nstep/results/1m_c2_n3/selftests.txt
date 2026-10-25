@@ -1,0 +1,20 @@
+$ python stage_13_c2_frontier_nstep/train.py --test-frontier
+cold start: n stays 10 for the first 9 episodes  True   want True
+tier 3 in 100% of episodes: frontier 3, n 5   want 3, 5   ok
+tier 4 in 10% of episodes: frontier 2, n 8   want 2, 8 (10% < 20% threshold)   ok
+after collapse to tier 1: frontier 1, n 3   want 1, 3 (n must NOT grow back from 4)   ok
+
+--tier-n 3,3,5,3,3: starts at n 3   True   want True
+  frontier 3 wants n 5, n stays 3   True   want True (monotone)
+
+BBF step-based control, 1M budget
+  step         0  n = 10
+  step   250,000  n = 6
+  step   500,000  n = 3
+  step 1,000,000  n = 3
+  anneals 10 -> 3   True   want True
+
+If the frontier never leaves tier 2, n stays 8 and this stage is fixed n.
+That is a result, not a bug -- frontier.jsonl is the evidence either way.
+
+PASS
