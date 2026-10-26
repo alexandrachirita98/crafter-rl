@@ -187,13 +187,42 @@ for s in ${SEEDS//,/ }; do
   printf '%s\n' "${CMD[*]//$LOGROOT/logdir}" > "$RESULTS/command_seed$s.txt"
 
   # tee so a long run is watchable live and still captured in full.
+  #
+  # Run it in the background and wait, so a SIGTERM aimed at this shell (SLURM
+  # --signal) can be forwarded to train.py rather than killing the shell out
+  # from under it. Signals do not propagate to grandchildren on their own, and
+  # without the forward the checkpoint handler in train.py never fires.
   set +e
-  "${CMD[@]}" 2>&1 | tee "$LOG"
-  rc=${PIPESTATUS[0]}
+  # Process substitution, not a pipe: on `cmd | tee`, $! is tee, and
+  # signalling tee leaves train.py running to be hard-killed. This way $! is
+  # the trainer and the log is still written live.
+  "${CMD[@]}" > >(tee "$LOG") 2>&1 &
+  TRAIN_PID=$!
+  forward_term() {
+    echo "run.sh: forwarding SIGTERM to train.py (pid $TRAIN_PID)" >&2
+    kill -TERM "$TRAIN_PID" 2>/dev/null || true
+  }
+  trap forward_term TERM
+  # The first wait returns as soon as the trap fires; the second one waits for
+  # the checkpoint to finish writing.
+  wait "$TRAIN_PID"
+  rc=$?
+  if [ "$rc" -gt 128 ]; then
+    wait "$TRAIN_PID" 2>/dev/null
+    rc=$?
+  fi
+  trap - TERM
+  # tee is a separate process now, so give it a moment to drain before
+  # anything reads $LOG back.
+  sleep 0.5
   set -e
+  # Do not bail here. The Recorder flushes stats.jsonl on every episode, so a
+  # run killed by a SLURM timeout still has every finished episode on disk,
+  # and the logdir is node-local scratch that dies with the allocation. Copy
+  # and summarise it first, fail at the end of the loop body: a timeout at
+  # 620k steps is a 620k-step datapoint, not a lost run.
   if [ "$rc" -ne 0 ]; then
-    echo "ERROR: seed $s exited $rc. Log kept at $LOG" >&2
-    exit "$rc"
+    echo "WARNING: seed $s exited $rc -- salvaging partial artifacts" >&2
   fi
 
   # Copy the stats the Recorder wrote into the results dir. With --envs > 1
@@ -223,7 +252,7 @@ for s in ${SEEDS//,/ }; do
   if [ -f "$RESULTS/stats_seed$s.jsonl" ]; then
     STAGE="$STAGE" SEED="$s" STEPS="$STEPS" NAME="$NAME" ENVS="$ENVS" \
     LOG="$LOG" STATS="$RESULTS/stats_seed$s.jsonl" \
-    OUT="$RESULTS/summary_seed$s.json" \
+    OUT="$RESULTS/summary_seed$s.json" RC="$rc" \
     python - <<'PY'
 import json, os, pathlib, re, sys
 sys.path.append(os.environ['PWD'])
@@ -263,11 +292,35 @@ def flag(name, default):
     m = re.search(rf'--{name}\s+(\S+)', cmd)
     return int(m.group(1)) if m else default
 
+# A killed run never reached --total-steps, and env_steps is the number every
+# comparison keys off. Take the last progress line as the truth and keep the
+# budget separately, so a partial run can never read as a complete one.
+rc = int(os.environ.get('RC', '0'))
+requested = int(os.environ['STEPS'])
+
+# train.py prints ran_steps= on its done line. Trust that over the budget: a
+# run stopped by a caught SIGTERM breaks out of the loop and exits 0, so the
+# exit code alone cannot tell a truncated run from a finished one.
+m_ran = re.search(r'ran_steps=(\d+)', log)
+if m_ran:
+    env_steps = int(m_ran.group(1))
+else:
+    # Older runs and stages without the done line: fall back to the last
+    # progress line, which is only a lower bound on a killed run.
+    steps_seen = re.findall(r'\]\[\s*(\d+)\]', log)
+    env_steps = int(steps_seen[-1]) if steps_seen else requested
+
+truncated = env_steps < requested
+partial = (rc != 0) or truncated
+
 summary = {
     'stage': os.environ['STAGE'],
     'run_kind': os.environ['NAME'],
     'command': cmd,
-    'env_steps': int(os.environ['STEPS']),
+    'env_steps': env_steps,
+    'partial': partial,
+    'exit_code': rc,
+    'requested_steps': requested,
     'num_envs': int(os.environ.get('ENVS', 1)),
     'seed': int(os.environ['SEED']),
     'device': device,
@@ -289,9 +342,35 @@ summary = {
                         for k, v in zip(ACHIEVEMENTS, percents)},
 }
 pathlib.Path(os.environ['OUT']).write_text(json.dumps(summary, indent=2) + '\n')
-print(f"score {score:.2f}%  over {n} episodes  ({fps} fps)")
+kind = 'PARTIAL ' if partial else ''
+print(f"{kind}score {score:.2f}%  over {n} episodes at "
+      f"{env_steps:,} steps  ({fps} fps)")
 print('wrote', os.environ['OUT'])
+if partial:
+    pathlib.Path(os.environ['OUT']).with_suffix('.partial-flag').touch()
 PY
+  fi
+
+  # Name the artifacts of a killed run so they cannot be mistaken for a
+  # finished one in */results/ -- a 620k summary sitting under the name
+  # of a 1M run is how a partial result ends up in a ladder table.
+  # A caught SIGTERM makes train.py stop early and exit 0, so the exit code
+  # is not enough: the summary script drops a flag file when the run did not
+  # reach its budget.
+  FLAG="$RESULTS/summary_seed$s.partial-flag"
+  if [ "$rc" -ne 0 ] || [ -e "$FLAG" ]; then
+    rm -f "$FLAG"
+    for f in "$RESULTS"/*_seed$s.json "$RESULTS"/*_seed$s.jsonl \
+             "$RESULTS"/train_seed$s.log; do
+      [ -e "$f" ] || continue
+      mv "$f" "${f%.*}.PARTIAL.${f##*.}"
+    done
+    if [ -d "$RESULTS/shards_seed$s" ]; then
+      mv "$RESULTS/shards_seed$s" "$RESULTS/shards_seed$s.PARTIAL"
+    fi
+    echo "WARNING: seed $s is PARTIAL (rc=$rc). Artifacts kept as" \
+         "*.PARTIAL.* -- do not read these as a finished run." >&2
+    [ "$rc" -ne 0 ] && exit "$rc"
   fi
   echo
 done

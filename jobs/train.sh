@@ -9,7 +9,13 @@
 #     sbatch --cpus-per-task=20 jobs/train.sh
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
-#SBATCH --time=02:00:00
+# A 16-env 1M run goes at ~87 fps, so it needs ~3.2 h. The old 2 h limit
+# killed every 1M attempt at ~620k steps.
+#SBATCH --time=05:00:00
+# SIGTERM to the batch shell 5 min before the hard kill, so train.py can
+# checkpoint and run.sh can still write its summary. B: targets the shell
+# rather than the job step, which is what lets the trap fire.
+#SBATCH --signal=B:TERM@300
 #SBATCH --output=logs/%x-%A_%a.out
 #SBATCH --array=1-2
 

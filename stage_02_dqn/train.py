@@ -24,6 +24,7 @@ import argparse
 import itertools
 import pathlib
 import random
+import signal
 import sys
 import time
 from collections import deque
@@ -370,7 +371,61 @@ class DQN:
 # ----------------------------------------------------------------- 5. loop
 
 
-def train(agent, env, step_num=100_000, log_every=10_000, use_mask=False):
+def save_ckpt(path, agent, step, episodes):
+    """Model, target, optimizer and schedule position. Not the buffer.
+
+    The buffer is 12 GB at a 500k capacity, so writing it every interval
+    would cost more wall clock than the training it protects. That makes this
+    a warm start, not an exact resume: weights come back, the replay
+    distribution does not. Enough to rescue a run the node killed; not enough
+    to call the result a continuous run of the combined length.
+
+    Writes to a temp path and renames. A SIGKILL partway through torch.save
+    leaves a truncated file, and overwriting in place would destroy the last
+    good checkpoint to produce it.
+    """
+    tmp = path.with_suffix('.tmp')
+    torch.save({
+        'step': step,
+        'episodes': episodes,
+        'net': agent._estimator.state_dict(),
+        'target': agent._target_estimator.state_dict(),
+        'optim': agent._optimizer.state_dict(),
+        'step_cnt': agent._step_cnt,
+        'eps': agent.eps,
+    }, tmp)
+    tmp.replace(path)
+
+
+def load_ckpt(path, agent):
+    """-> (step, episodes) to resume from. Mutates agent in place.
+
+    The epsilon schedule is a generator and cannot be pickled, so it is
+    fast-forwarded by consuming it step_cnt times rather than restored.
+    """
+    ck = torch.load(path, map_location=DEVICE, weights_only=False)
+    agent._estimator.load_state_dict(ck['net'])
+    agent._target_estimator.load_state_dict(ck['target'])
+    agent._optimizer.load_state_dict(ck['optim'])
+    agent.eps = ck['eps']
+
+    # The buffer is not in the checkpoint, so it comes back empty. learn()
+    # gates on step_cnt < warmup_steps, and restoring step_cnt as-is would put
+    # the agent straight past the gate and sample a batch out of an empty
+    # deque. Rewind step_cnt so the first warmup_steps calls only store, then
+    # let it carry on from where it was.
+    agent._step_cnt = 0
+    # Fast-forward the schedule so exploration resumes where it stopped
+    # rather than restarting at eps=1.0. The generator cannot be pickled, so
+    # it is advanced rather than restored.
+    for _ in range(ck['step_cnt']):
+        next(agent._epsilon, None)
+    return ck['step'], ck['episodes']
+
+
+def train(agent, env, step_num=100_000, log_every=10_000,
+          use_mask=False, ckpt_path=None, ckpt_every=0,
+          start_step=0, start_episodes=0):
     """The lab's loop, over a VecEnv on Crafter's 4-tuple API.
 
     step_num is ENV STEPS, the benchmark budget, not loop iterations: with
@@ -396,13 +451,27 @@ def train(agent, env, step_num=100_000, log_every=10_000, use_mask=False):
     ep_reward = np.zeros(num_envs, dtype=np.float64)
     recent = deque(maxlen=10)
     states = env.reset()
-    episodes = 0
+    episodes = start_episodes
     start = time.time()
+
+    # SLURM sends SIGTERM before the hard kill (see --signal in jobs/train.sh).
+    # Catching it to checkpoint turns a timeout into a resumable run; the
+    # episodes already in stats.jsonl are flushed per episode and survive
+    # regardless.
+    dying = {'now': False}
+
+    def _on_term(signum, frame):
+        del signum, frame
+        dying['now'] = True
+
+    if ckpt_path is not None:
+        signal.signal(signal.SIGTERM, _on_term)
     # reset() returns no info, so the first step runs unmasked -- which is
     # what legal_masks would give for a fresh player anyway.
     masks = None
 
-    for step in range(0, step_num, num_envs):
+    done_steps = start_step
+    for step in range(start_step, step_num, num_envs):
 
         actions = agent.step(states, masks)
         # Every stage's step() is (N,64,64,3) in, (N,) out. A stage written
@@ -456,7 +525,21 @@ def train(agent, env, step_num=100_000, log_every=10_000, use_mask=False):
                       float(np.mean(seen)), agent.eps,
                       agent.loss, agent.mean_q, fps), flush=True)
 
-    return None, episodes, time.time() - start
+        if ckpt_path is not None and ckpt_every \
+                and done_steps % ckpt_every < num_envs:
+            save_ckpt(ckpt_path, agent, done_steps, episodes)
+
+        # A caught SIGTERM means the allocation is about to end. Save and
+        # leave by the normal path so the caller still writes its summary
+        # over the episodes recorded so far.
+        if dying['now']:
+            if ckpt_path is not None:
+                save_ckpt(ckpt_path, agent, done_steps, episodes)
+            print(f'\nSIGTERM at {done_steps:,} steps -- checkpointed',
+                  flush=True)
+            break
+
+    return done_steps, episodes, time.time() - start
 
 
 # ------------------------------------------------------------------ 6. main
@@ -518,6 +601,15 @@ def parse_args(argv=None, extra_args=None):
                    help='linear over the first 25%% of a 1M run')
 
     p.add_argument('--log-every', type=int, default=10_000)
+
+    # Weights only, not the buffer: see save_ckpt. 0 disables, which is what
+    # every run already in */results/ did.
+    p.add_argument('--ckpt-every', type=int, default=0,
+                   help='write a weights checkpoint every N env steps; '
+                        '0 disables. A caught SIGTERM always writes one.')
+    p.add_argument('--resume', action='store_true',
+                   help='start from the checkpoint in the logdir if one is '
+                        'there. Warm start, not an exact resume.')
 
     # Masking defaults OFF so every run already in */results/ reproduces.
     # --no-mask is the explicit control arm: it is the default, but naming it
@@ -619,14 +711,26 @@ def main(argv=None, agent_cls=DQN, stage_id=STAGE_ID, extra_args=None,
         **extra,
     )
 
-    _, episodes, elapsed = train(agent, env, step_num=args.total_steps,
-                                 log_every=args.log_every,
-                                 use_mask=args.mask)
+    ckpt_path = logdir / 'ckpt.pt' if args.ckpt_every or args.resume else None
+    start_step, start_episodes = 0, 0
+    if args.resume and ckpt_path is not None and ckpt_path.exists():
+        start_step, start_episodes = load_ckpt(ckpt_path, agent)
+        print(f'resuming from {ckpt_path} at {start_step:,} steps '
+              f'(warm start: buffer is empty)', flush=True)
+
+    ran_steps, episodes, elapsed = train(
+        agent, env, step_num=args.total_steps, log_every=args.log_every,
+        use_mask=args.mask, ckpt_path=ckpt_path, ckpt_every=args.ckpt_every,
+        start_step=start_step, start_episodes=start_episodes)
 
     # final_eps printed explicitly: the progress lines are gated on
     # --log-every, so a run shorter than one interval has none to scrape.
+    # ran_steps, not --total-steps: a SIGTERM break stops early and exits 0,
+    # so this line is the only place the real length is recorded. run.sh reads
+    # it back to mark the summary partial.
     print(f'\ndone: {episodes} episodes in {elapsed / 60:.1f} min '
-          f'({args.total_steps / elapsed:.0f} fps), final_eps={agent.eps:.3f}')
+          f'({ran_steps / elapsed:.0f} fps), final_eps={agent.eps:.3f}, '
+          f'ran_steps={ran_steps}, requested_steps={args.total_steps}')
     report(logdir, episodes)
 
 
