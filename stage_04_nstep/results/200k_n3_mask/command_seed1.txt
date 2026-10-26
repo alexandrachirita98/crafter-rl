@@ -1,0 +1,1 @@
+python stage_04_nstep/train.py --total-steps 200000 --num-envs 16 --seed 1 --logdir logdir --n-step 3 --mask --eps-decay-steps 50000 --seed-stride 16

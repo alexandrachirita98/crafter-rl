@@ -1,0 +1,63 @@
+Setting all rngs to seed=2
+stage stage_13_c2_frontier_nstep  seed 2  steps 1,000,000  envs 1  device cuda
+buffer 500,000 transitions = 12.3 GB host RAM
+logging to /tmp/crafter-284771/crafter_reward-stage_13_c2_frontier_nstep/2/stats.jsonl
+demos: DISABLED (--no-demos), this is the control arm
+frontier log: /tmp/crafter-284771/crafter_reward-stage_13_c2_frontier_nstep/2/frontier.jsonl
+[  59][   10000], R/ep=  1.70, eps=0.98, loss=  0.0015, meanQ=  0.098, tier=1, n=3,    94 fps
+[ 118][   20000], R/ep=  2.30, eps=0.94, loss=  0.0714, meanQ=  0.525, tier=1, n=3,    86 fps
+[ 180][   30000], R/ep=  1.70, eps=0.91, loss=  0.0834, meanQ=  0.920, tier=1, n=3,    83 fps
+[ 240][   40000], R/ep=  1.60, eps=0.87, loss=  0.0250, meanQ=  1.004, tier=1, n=3,    82 fps
+[ 297][   50000], R/ep=  3.20, eps=0.83, loss=  0.0297, meanQ=  1.308, tier=1, n=3,    82 fps
+[ 359][   60000], R/ep=  2.00, eps=0.79, loss=  0.0137, meanQ=  1.300, tier=1, n=3,    81 fps
+[ 417][   70000], R/ep=  2.90, eps=0.75, loss=  0.0309, meanQ=  1.584, tier=1, n=3,    81 fps
+[ 475][   80000], R/ep=  2.80, eps=0.72, loss=  0.0483, meanQ=  1.673, tier=1, n=3,    80 fps
+[ 532][   90000], R/ep=  2.90, eps=0.68, loss=  0.0476, meanQ=  1.417, tier=1, n=3,    80 fps
+[ 587][  100000], R/ep=  2.70, eps=0.64, loss=  0.0194, meanQ=  1.624, tier=1, n=3,    80 fps
+[ 647][  110000], R/ep=  3.00, eps=0.60, loss=  0.0642, meanQ=  2.018, tier=1, n=3,    80 fps
+[ 702][  120000], R/ep=  3.20, eps=0.56, loss=  0.0380, meanQ=  1.796, tier=1, n=3,    80 fps
+[ 759][  130000], R/ep=  3.30, eps=0.53, loss=  0.0233, meanQ=  2.142, tier=1, n=3,    80 fps
+[ 814][  140000], R/ep=  3.00, eps=0.49, loss=  0.0447, meanQ=  2.446, tier=1, n=3,    80 fps
+[ 872][  150000], R/ep=  3.50, eps=0.45, loss=  0.0321, meanQ=  2.334, tier=1, n=3,    80 fps
+[ 926][  160000], R/ep=  3.60, eps=0.41, loss=  0.0300, meanQ=  2.456, tier=1, n=3,    80 fps
+[ 979][  170000], R/ep=  3.10, eps=0.37, loss=  0.0359, meanQ=  2.282, tier=1, n=3,    80 fps
+[1035][  180000], R/ep=  2.60, eps=0.34, loss=  0.0589, meanQ=  1.801, tier=1, n=3,    80 fps
+[1092][  190000], R/ep=  3.00, eps=0.30, loss=  0.0503, meanQ=  1.695, tier=1, n=3,    80 fps
+[1145][  200000], R/ep=  2.20, eps=0.26, loss=  0.0379, meanQ=  1.395, tier=1, n=3,    80 fps
+[1198][  210000], R/ep=  3.20, eps=0.22, loss=  0.0684, meanQ=  1.598, tier=1, n=3,    80 fps
+[1253][  220000], R/ep=  2.90, eps=0.18, loss=  0.0341, meanQ=  1.805, tier=1, n=3,    80 fps
+[1310][  230000], R/ep=  3.10, eps=0.15, loss=  0.0113, meanQ=  1.348, tier=1, n=3,    80 fps
+[1362][  240000], R/ep=  2.40, eps=0.11, loss=  0.0246, meanQ=  1.342, tier=1, n=3,    80 fps
+[1413][  250000], R/ep=  3.20, eps=0.07, loss=  0.0219, meanQ=  1.465, tier=1, n=3,    80 fps
+[1467][  260000], R/ep=  2.90, eps=0.05, loss=  0.0419, meanQ=  1.357, tier=1, n=3,    80 fps
+[1519][  270000], R/ep=  3.00, eps=0.05, loss=  0.0371, meanQ=  1.470, tier=1, n=3,    80 fps
+[1577][  280000], R/ep=  2.60, eps=0.05, loss=  0.0406, meanQ=  0.931, tier=1, n=3,    80 fps
+[1635][  290000], R/ep=  2.50, eps=0.05, loss=  0.0159, meanQ=  1.204, tier=1, n=3,    80 fps
+[1692][  300000], R/ep=  3.40, eps=0.05, loss=  0.0518, meanQ=  0.939, tier=1, n=3,    80 fps
+[1743][  310000], R/ep=  3.50, eps=0.05, loss=  0.0091, meanQ=  1.302, tier=1, n=3,    80 fps
+[1794][  320000], R/ep=  2.80, eps=0.05, loss=  0.0312, meanQ=  1.169, tier=1, n=3,    80 fps
+[1848][  330000], R/ep=  2.50, eps=0.05, loss=  0.0327, meanQ=  1.189, tier=1, n=3,    80 fps
+[1900][  340000], R/ep=  4.10, eps=0.05, loss=  0.0293, meanQ=  1.146, tier=1, n=3,    80 fps
+[1955][  350000], R/ep=  2.80, eps=0.05, loss=  0.0139, meanQ=  1.037, tier=1, n=3,    80 fps
+[2004][  360000], R/ep=  3.20, eps=0.05, loss=  0.0141, meanQ=  1.036, tier=1, n=3,    80 fps
+[2059][  370000], R/ep=  3.10, eps=0.05, loss=  0.0714, meanQ=  1.029, tier=1, n=3,    80 fps
+[2106][  380000], R/ep=  3.10, eps=0.05, loss=  0.0522, meanQ=  0.963, tier=1, n=3,    80 fps
+[2160][  390000], R/ep=  3.20, eps=0.05, loss=  0.1019, meanQ=  1.142, tier=1, n=3,    80 fps
+[2216][  400000], R/ep=  2.80, eps=0.05, loss=  0.0650, meanQ=  1.027, tier=1, n=3,    80 fps
+[2269][  410000], R/ep=  2.90, eps=0.05, loss=  0.0487, meanQ=  1.097, tier=1, n=3,    80 fps
+[2324][  420000], R/ep=  3.50, eps=0.05, loss=  0.0159, meanQ=  0.976, tier=1, n=3,    80 fps
+[2380][  430000], R/ep=  3.30, eps=0.05, loss=  0.0327, meanQ=  1.075, tier=1, n=3,    80 fps
+[2433][  440000], R/ep=  3.50, eps=0.05, loss=  0.0214, meanQ=  0.984, tier=1, n=3,    80 fps
+[2484][  450000], R/ep=  3.60, eps=0.05, loss=  0.0654, meanQ=  0.959, tier=1, n=3,    80 fps
+[2535][  460000], R/ep=  3.00, eps=0.05, loss=  0.0130, meanQ=  1.059, tier=1, n=3,    80 fps
+[2590][  470000], R/ep=  3.40, eps=0.05, loss=  0.0332, meanQ=  1.179, tier=1, n=3,    80 fps
+[2642][  480000], R/ep=  3.00, eps=0.05, loss=  0.0222, meanQ=  1.088, tier=1, n=3,    80 fps
+[2701][  490000], R/ep=  3.10, eps=0.05, loss=  0.0130, meanQ=  1.372, tier=1, n=3,    80 fps
+[2755][  500000], R/ep=  3.60, eps=0.05, loss=  0.0139, meanQ=  1.146, tier=1, n=3,    80 fps
+[2809][  510000], R/ep=  3.90, eps=0.05, loss=  0.0152, meanQ=  0.863, tier=1, n=3,    80 fps
+[2860][  520000], R/ep=  3.90, eps=0.05, loss=  0.0679, meanQ=  1.124, tier=1, n=3,    80 fps
+[2920][  530000], R/ep=  3.50, eps=0.05, loss=  0.0569, meanQ=  1.060, tier=1, n=3,    80 fps
+[2977][  540000], R/ep=  3.50, eps=0.05, loss=  0.0085, meanQ=  1.085, tier=1, n=3,    80 fps
+[3028][  550000], R/ep=  3.90, eps=0.05, loss=  0.0362, meanQ=  1.198, tier=1, n=3,    80 fps
+[3085][  560000], R/ep=  3.40, eps=0.05, loss=  0.0397, meanQ=  1.091, tier=1, n=3,    80 fps
+[3141][  570000], R/ep=  3.10, eps=0.05, loss=  0.0759, meanQ=  1.571, tier=1, n=3,    80 fps
