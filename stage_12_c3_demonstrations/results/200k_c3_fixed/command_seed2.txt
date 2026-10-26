@@ -1,0 +1,1 @@
+python stage_12_c3_demonstrations/train.py --total-steps 200000 --num-envs 1 --seed 2 --logdir logdir --base stage03 --n-step 1 --lambda-aux 0 --eps-decay-steps 50000 --no-mask

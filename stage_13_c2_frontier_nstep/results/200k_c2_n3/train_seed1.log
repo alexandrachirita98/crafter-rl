@@ -1,0 +1,41 @@
+Setting all rngs to seed=1
+stage stage_13_c2_frontier_nstep  seed 1  steps 200,000  envs 1  device cuda
+buffer 100,000 transitions = 2.5 GB host RAM
+logging to /tmp/crafter-284609/crafter_reward-stage_13_c2_frontier_nstep/1/stats.jsonl
+demos: DISABLED (--no-demos), this is the control arm
+frontier log: /tmp/crafter-284609/crafter_reward-stage_13_c2_frontier_nstep/1/frontier.jsonl
+[  60][   10000], R/ep=  1.70, eps=1.00, loss=     nan, meanQ=    nan, tier=1, n=3,   120 fps
+[ 118][   20000], R/ep=  1.30, eps=1.00, loss=     nan, meanQ=    nan, tier=1, n=3,   122 fps
+[ 177][   30000], R/ep=  2.40, eps=0.81, loss=  0.0044, meanQ=  0.336, tier=1, n=3,   105 fps
+[ 235][   40000], R/ep=  2.20, eps=0.62, loss=  0.0467, meanQ=  0.707, tier=1, n=3,    98 fps
+[ 291][   50000], R/ep=  2.20, eps=0.43, loss=  0.0630, meanQ=  0.926, tier=1, n=3,    95 fps
+[ 349][   60000], R/ep=  2.60, eps=0.24, loss=  0.0236, meanQ=  1.101, tier=1, n=3,    92 fps
+[ 406][   70000], R/ep=  1.70, eps=0.05, loss=  0.0095, meanQ=  1.166, tier=1, n=3,    90 fps
+[ 462][   80000], R/ep=  2.40, eps=0.05, loss=  0.0257, meanQ=  1.085, tier=1, n=3,    89 fps
+[ 518][   90000], R/ep=  3.10, eps=0.05, loss=  0.0183, meanQ=  1.118, tier=1, n=3,    88 fps
+[ 572][  100000], R/ep=  2.50, eps=0.05, loss=  0.0157, meanQ=  1.577, tier=1, n=3,    87 fps
+[ 624][  110000], R/ep=  3.00, eps=0.05, loss=  0.0149, meanQ=  1.471, tier=1, n=3,    87 fps
+[ 679][  120000], R/ep=  3.00, eps=0.05, loss=  0.0560, meanQ=  1.592, tier=1, n=3,    86 fps
+[ 735][  130000], R/ep=  3.00, eps=0.05, loss=  0.0179, meanQ=  1.291, tier=1, n=3,    86 fps
+[ 790][  140000], R/ep=  3.30, eps=0.05, loss=  0.0256, meanQ=  1.396, tier=1, n=3,    85 fps
+[ 841][  150000], R/ep=  2.90, eps=0.05, loss=  0.0181, meanQ=  1.507, tier=1, n=3,    85 fps
+[ 896][  160000], R/ep=  3.70, eps=0.05, loss=  0.0825, meanQ=  1.655, tier=1, n=3,    85 fps
+[ 952][  170000], R/ep=  3.30, eps=0.05, loss=  0.0103, meanQ=  1.238, tier=1, n=3,    85 fps
+[1004][  180000], R/ep=  3.10, eps=0.05, loss=  0.0335, meanQ=  1.198, tier=1, n=3,    85 fps
+[1060][  190000], R/ep=  3.60, eps=0.05, loss=  0.0263, meanQ=  1.229, tier=1, n=3,    84 fps
+[1119][  200000], R/ep=  3.80, eps=0.05, loss=  0.0281, meanQ=  1.391, tier=1, n=3,    84 fps
+
+done: 1119 episodes in 39.7 min (84 fps), final_eps=0.050
+score over 1119 episodes: 2.84%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  collect_sapling       88.4%
+  place_plant           81.6%
+  wake_up               78.6%
+  collect_wood          54.0%
+  place_table           26.6%
+  collect_drink         24.8%
+  defeat_zombie          7.9%
+  eat_cow                6.2%
+  make_wood_pickaxe      1.9%
+  make_wood_sword        0.7%
