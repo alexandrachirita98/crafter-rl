@@ -31,6 +31,7 @@ Run:
 
 import pathlib
 import random
+import signal
 import sys
 import time
 from collections import deque
@@ -43,11 +44,11 @@ import torch.nn.functional as F
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from common.env import bootstrap_mask
-from common.masking import legal_mask
+from common.masking import legal_masks
 from common.metrics import ACHIEVEMENTS
 from common.replay import beta_by_step
 from stage_02_dqn.train import (DEVICE, N_ACTIONS, _to_tensor, get_estimator,
-                                main as stage_02_main)
+                                main as stage_02_main, save_ckpt)
 from stage_04_nstep.train import NStepDoubleDQN, NStepReplayMemory
 from stage_06_qrdqn.train import QRDuelingNet
 from stage_08_per.train import PrioritizedReplayMemory
@@ -234,7 +235,15 @@ class AuxMixin:
                  aux_none_weight=0.1, aux_wake_weight=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._lambda_aux = lambda_aux
-        self._labeller = AchievementLabeller(horizon=aux_horizon)
+        # ONE LABELLER PER ENV, for the reason stage 04 shards its n-step
+        # windows: a label is "what unlocks next in THIS trajectory", and the
+        # lookahead deque only means that if every count it holds came from
+        # one continuous stream. At num_envs > 1 the transitions arrive
+        # round-robin, so a shared labeller would label env 0's states
+        # against env 15's unlocks -- and that trains fine, it just trains on
+        # garbage.
+        self._labellers = [AchievementLabeller(horizon=aux_horizon)
+                           for _ in range(self._num_envs)]
         # Class imbalance, down-weighted rather than subsampled. Which class
         # dominates depends on the horizon, measured over 4k random steps:
         #
@@ -253,7 +262,10 @@ class AuxMixin:
         if aux_wake_weight is not None:
             weight[ACHIEVEMENTS.index('wake_up')] = aux_wake_weight
         self._aux_weight = weight
-        self._pending_counts = None     # set by learn() each step
+        # Per env, for the same reason. learn(0..15) all run inside one loop
+        # iteration, so a single slot would hold env 15's counts by the time
+        # env 0's _emit fires.
+        self._pending_counts = [None] * self._num_envs
         # logged alongside loss/meanQ
         self.aux_loss = float('nan')
         self.aux_acc = float('nan')
@@ -270,8 +282,12 @@ class AuxMixin:
         the action has already absorbed that action's own unlock and cannot
         see it. train_aux holds info['achievements'] back by one step for
         exactly this reason; see the note there.
+
+        `counts` is env i's own history. Stashing it per env matters: the
+        loop calls learn(0..num_envs-1) inside one iteration, so a single
+        slot would be overwritten before env 0's _emit reads it back.
         """
-        self._pending_counts = counts
+        self._pending_counts[i] = counts
         if self._step_cnt >= self._warmup_steps and len(self._buffer) == 0:
             # Stage 02 sizes warmup against the batch, but the n-step window
             # and the lookahead both hold transitions back, so a short run can
@@ -281,12 +297,12 @@ class AuxMixin:
             return
         super().learn(i, state, action, reward, state_, mask, legal_)
 
-    def _buffer_push(self, transition):
+    def _buffer_push(self, i, transition):
         """Hold stage 04's six-tuple until its label is known, then push."""
-        counts = self._pending_counts
+        counts = self._pending_counts[i]
         if counts is None:                      # self-test path
             counts = np.zeros(N_ACH, dtype=np.int32)
-        for payload, label in self._labeller.push(transition, counts):
+        for payload, label in self._labellers[i].push(transition, counts):
             self._buffer.push((*payload, label))
 
     def _emit(self, i):
@@ -297,14 +313,16 @@ class AuxMixin:
             G += self._gamma ** k * r
         s0, a0 = window[0][0], window[0][1]
         _, _, _, s_n, mask_n, legal_n = window[-1]
-        self._buffer_push((s0, a0, G, s_n, mask_n, len(window), legal_n))
+        self._buffer_push(i, (s0, a0, G, s_n, mask_n, len(window), legal_n))
         window.popleft()
 
     def end_episode(self, i):
         super().end_episode(i)                   # flushes the n-step window
         # Labels for the tail are computed on a shorter future, which is
-        # correct: the episode genuinely ends there.
-        for payload, label in self._labeller.flush():
+        # correct: the episode genuinely ends there. Only env i's labeller:
+        # flushing the others would dump their mid-episode lookahead, and
+        # those labels would be computed on a future that was simply cut off.
+        for payload, label in self._labellers[i].flush():
             self._buffer.push((*payload, label))
 
 
@@ -389,79 +407,112 @@ class AuxNStepDoubleDQN(AuxMixin, NStepDoubleDQN):
 
 
 def train_aux(agent, env, step_num=100_000, log_every=10_000,
-              use_mask=False):
+              use_mask=False, ckpt_path=None, ckpt_every=0,
+              start_step=0, start_episodes=0):
     """Stage 02's loop, passing info['achievements'] down to the labeller.
 
-    use_mask turns on legal-action masking. This loop runs ONE env and calls
-    reset() itself, so unlike the VecEnv loop there is no stale-info seam --
-    but the mask must still be dropped on reset, because reset() returns no
-    info and the fresh player owns nothing.
+    Identical to stage 02's `train` apart from the `counts` kwarg on learn()
+    and the aux columns in the progress line, so it inherits the stride by
+    num_envs, the auto-reset handling, the SIGTERM checkpoint and the
+    final_obs seam. The labeller is sharded per env (see AuxMixin), so a
+    vectorised loop is as correct here as the scalar one was.
+
+    Two invariants that are easy to lose in this loop and invisible in the
+    loss if lost:
+
+    - counts are held back one step. The label asks "what unlocks from
+      here", and _label() compares the future against this base, so a base
+      taken AFTER the action has already absorbed that action's own unlock
+      and cannot see it. Hence learn(counts=counts[i]) first, then
+      counts[i] = counts_vector(infos[i]). Backwards, every label is one
+      step early: the state whose own action unlocks something is labelled
+      "none soon" and the state before it gets the label instead.
+    - counts reset to zero on THAT env's done, not on any env's. A fresh
+      player has unlocked nothing.
     """
-    N = 0
-    ep_rewards = [0.0]
-    # main() hands these stages a VecEnv(num_envs=1), not a bare crafter.Env,
-    # so everything here is a length-1 batch: reset() gives (1,64,64,3) and
-    # step() wants a sequence of actions. Indexing [0] back out keeps the rest
-    # of the loop scalar, which is what the labeller and the n-step window
-    # expect.
-    state, done = env.reset()[0], False
+    num_envs = env.num_envs
+    ep_reward = np.zeros(num_envs, dtype=np.float64)
+    recent = deque(maxlen=10)
+    states = env.reset()
+    episodes = start_episodes
     start = time.time()
-    mask = None                     # reset() returns no info
-    # The counts AT `state`, i.e. before this step's action. info carries the
-    # counts after it, so feeding info straight to the labeller makes every
-    # label one step early: the base already contains the unlock the action
-    # just earned, so the state whose own action unlocks something is labelled
-    # "none soon" and the state before it gets the label instead. Measured
-    # with the real labeller at horizon 100. A fresh player has unlocked
-    # nothing, so the episode starts at zeros.
-    counts = np.zeros(len(ACHIEVEMENTS), dtype=np.int32)
 
-    for step in range(step_num):
-        action = agent.step(state[None], mask)[0]
-        state_, reward, done, info = env.step([action])
-        state_, reward, done, info = state_[0], reward[0], done[0], info[0]
+    dying = {'now': False}
+
+    def _on_term(signum, frame):
+        del signum, frame
+        dying['now'] = True
+
+    if ckpt_path is not None:
+        signal.signal(signal.SIGTERM, _on_term)
+    # reset() returns no info, so the first step runs unmasked -- which is
+    # what legal_masks would give for a fresh player anyway.
+    masks = None
+    counts = [np.zeros(N_ACH, dtype=np.int32) for _ in range(num_envs)]
+
+    done_steps = start_step
+    for step in range(start_step, step_num, num_envs):
+
+        actions = agent.step(states, masks)
+        states_, rewards, dones, infos = env.step(actions)
+
         if use_mask:
-            mask = legal_mask(info)[None]
-        # mask is (1,17) for agent.step(); the learner wants the row.
-        # Timeout seam: on the 10,000-step cap the mask is 1.0 and the
-        # target bootstraps off state_, which VecEnv has already replaced
-        # with the next world's first frame. See common/env.py.
-        next_state = info['final_obs'] if (done and 'final_obs' in info) \
-            else state_
-        agent.learn(0, state, action, reward, next_state,
-                    bootstrap_mask(done, info),
-                    mask[0] if use_mask else None,
-                    counts=counts)
-        counts = counts_vector(info)
-        state = state_
-        ep_rewards[N] += reward
+            # dones matters: VecEnv hands back the DYING step's info beside
+            # the NEXT episode's first observation. legal_masks falls back to
+            # all-ones wherever done is set.
+            masks = legal_masks(infos, dones)
 
-        if done:
-            agent.end_episode(0)
-            # VecEnv auto-resets, so state_ is already the new episode's
-            # first frame; calling reset() here would throw it away and
-            # start a third episode mid-stream.
-            done = False
-            mask = None             # new world, new player: nothing owned
-            # Same reason: info was the DYING player's, so its counts
-            # describe a world that no longer exists. The labeller is
-            # already flushed by end_episode, so nothing crosses the seam,
-            # but the next step's base has to start from zero.
-            counts = np.zeros(len(ACHIEVEMENTS), dtype=np.int32)
-            ep_rewards.append(0.0)
-            N += 1
+        for i in range(num_envs):
+            # On a TIMEOUT the mask is 1.0 and the target bootstraps off
+            # state_, which VecEnv has already replaced with the next world's
+            # first frame. info['final_obs'] is the real one.
+            next_state = states_[i]
+            if dones[i] and 'final_obs' in infos[i]:
+                next_state = infos[i]['final_obs']
+            agent.learn(i, states[i], actions[i], rewards[i], next_state,
+                        bootstrap_mask(dones[i], infos[i]),
+                        masks[i] if use_mask else None,
+                        counts=counts[i])
+            counts[i] = counts_vector(infos[i])
+            ep_reward[i] += rewards[i]
+            if dones[i]:
+                agent.end_episode(i)
+                # New world, new player: info was the DYING player's, so its
+                # counts describe a world that no longer exists. The labeller
+                # is already flushed by end_episode, so nothing crosses the
+                # seam, but the next step's base has to start from zero.
+                counts[i] = np.zeros(N_ACH, dtype=np.int32)
+                recent.append(ep_reward[i])
+                ep_reward[i] = 0.0
+                episodes += 1
 
-        if (step + 1) % log_every == 0:
-            fps = (step + 1) / (time.time() - start)
-            recent = ep_rewards[-11:-1] or [float('nan')]
+        states = states_
+
+        done_steps = step + num_envs
+        if done_steps % log_every < num_envs:
+            fps = done_steps / (time.time() - start)
+            seen = list(recent) or [float('nan')]
             print('[{0:4d}][{1:8d}], R/ep={2:6.2f}, eps={3:4.2f}, '
                   'loss={4:8.4f}, meanQ={5:7.3f}, aux={6:6.3f}, '
                   'acc={7:4.1%} (majority {8:4.1%}), {9:5.0f} fps'.format(
-                      N, step + 1, float(np.mean(recent)), agent.eps,
+                      episodes, done_steps, float(np.mean(seen)), agent.eps,
                       agent.loss, agent.mean_q, agent.aux_loss,
                       agent.aux_acc, agent.aux_major, fps), flush=True)
 
-    return None, N, time.time() - start
+        if ckpt_path is not None and ckpt_every \
+                and done_steps % ckpt_every < num_envs:
+            save_ckpt(ckpt_path, agent, done_steps, episodes)
+
+        # A caught SIGTERM means the allocation is about to end. Save and
+        # leave by the normal path so the caller still writes its summary.
+        if dying['now']:
+            if ckpt_path is not None:
+                save_ckpt(ckpt_path, agent, done_steps, episodes)
+            print(f'\nSIGTERM at {done_steps:,} steps -- checkpointed',
+                  flush=True)
+            break
+
+    return done_steps, episodes, time.time() - start
 
 
 def extra_args(p):
@@ -700,6 +751,71 @@ def test_aux(horizon=3):
     print(f'  aux loss still reported  {not np.isnan(agent0.aux_loss)}   '
           f'want True ({agent0.aux_loss:.3f}, logged, zero gradient)')
     ok &= aux_frozen and q_trains
+
+    # -- half five: the labeller state is per env --------------------------
+    # The multi-env check. A shared labeller or a shared _pending_counts slot
+    # labels env 0's states against env 15's unlocks: training still runs,
+    # the loss still falls, the accuracy still looks plausible. Only an
+    # isolation assertion catches it, which is why this is not a score
+    # comparison.
+    from stage_04_nstep.train import _StubBuffer
+
+    reset_rng(0)
+    n_envs = 4
+    args4 = argparse.Namespace(lin_size=16, stride=2, batch_size=batch,
+                               n_step=1, total_steps=steps, lambda_aux=0.5,
+                               aux_horizon=3, aux_none_weight=0.1,
+                               aux_wake_weight=None)
+    net4, _, extra4 = build_base03(args4, capacity)
+    stub = _StubBuffer()
+    agent4 = AuxNStepDoubleDQN(net4, stub, O.Adam(net4.parameters(), lr=1e-4),
+                               get_epsilon_schedule(1.0, 0.05, steps),
+                               N_ACTIONS, gamma=0.99,
+                               # above the step count: no sample(), no net
+                               warmup_steps=10_000, update_steps=2,
+                               update_target_steps=10, num_envs=n_envs,
+                               **extra4)
+
+    sharded = len(agent4._labellers) == n_envs \
+        and len(agent4._pending_counts) == n_envs
+    # Env 0 unlocks collect_wood at step 2; envs 1-3 unlock nothing ever. The
+    # states are tagged 'e{env}t{step}' so each buffer row says which env's
+    # trajectory it came from -- shapes alone would not.
+    wood = ACHIEVEMENTS.index('collect_wood')
+    n_steps_4 = 8
+    zeros = np.zeros(N_ACH, dtype=np.int32)
+    base = [zeros.copy() for _ in range(n_envs)]
+    for t in range(n_steps_4):
+        for i in range(n_envs):
+            agent4.learn(i, f'e{i}t{t}', 0, 0.0, f'e{i}t{t + 1}', 1.0,
+                         legal_=np.ones(N_ACTIONS, dtype=np.float32),
+                         counts=base[i])
+            if i == 0 and t == 2:       # env 0's action at t2 earns the wood
+                base[i] = base[i].copy()
+                base[i][wood] += 1
+    # Flush env 0 only; envs 1-3 are still mid-episode.
+    agent4.end_episode(0)
+
+    by_env = {i: [] for i in range(n_envs)}
+    for row in stub.pushed:
+        by_env[int(row[0][1])].append(row[-1])
+    # Env 0's rows: every state at or before t2 sees the wood within
+    # horizon 3; the flush emits the tail as well, which reads none_soon
+    # once the unlock is behind it.
+    env0_sees_wood = (by_env[0][:3] == [wood] * 3) and len(by_env[0]) > 3
+    others_clean = all(set(by_env[i]) == {NONE_SOON} and by_env[i]
+                       for i in range(1, n_envs))
+    # Change #4: flushing env 0 must not dump the others' lookahead.
+    others_pending = all(len(agent4._labellers[i]._pending) > 0
+                         for i in range(1, n_envs))
+    print(f'\nper-env isolation, {n_envs} envs')
+    print(f'  labeller + counts sharded {sharded}   want True')
+    print(f'  env 0 rows carry the wood {env0_sees_wood}   want True  '
+          f'({[int(y) for y in by_env[0]]})')
+    print(f'  envs 1-3 rows none_soon   {others_clean}   want True')
+    print(f'  end_episode(0) spares 1-3 {others_pending}   want True')
+    ok &= sharded and env0_sees_wood and others_clean and others_pending
+
     print('\nPASS' if ok else '\nFAIL')
     return 0 if ok else 1
 
@@ -707,17 +823,6 @@ def test_aux(horizon=3):
 def main(argv=None):
     if '--test-aux' in (argv if argv is not None else sys.argv[1:]):
         return test_aux()
-    if '--num-envs' in (argv if argv is not None else sys.argv[1:]):
-        # These stages replace stage 02's loop with a single-env one, so a
-        # parallel request must fail loudly rather than be ignored.
-        import argparse as _ap
-        _p = _ap.ArgumentParser(add_help=False)
-        _p.add_argument('--num-envs', type=int, default=1)
-        if _p.parse_known_args(argv if argv is not None else sys.argv[1:])[0].num_envs > 1:
-            raise SystemExit(
-                f'{STAGE_ID} runs a single-env loop (its labeller needs one '
-                'continuous trajectory); --num-envs > 1 is not supported')
-
     import stage_02_dqn.train as s02
     original = s02.train
     s02.train = train_aux               # the loop must pass achievements down

@@ -1,0 +1,19 @@
+Setting all rngs to seed=1
+stage stage_08_per  seed 1  steps 2,000  envs 16  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/s08probe/crafter_reward-stage_08_per/1/shard*/stats.jsonl
+[   0][     208], R/ep=   nan, eps=1.00, loss=     nan, meanQ=    nan,   722 fps
+[   0][     400], R/ep=   nan, eps=1.00, loss=     nan, meanQ=    nan,   744 fps
+[   0][     608], R/ep=   nan, eps=1.00, loss=  2.7845, meanQ=  0.209,    85 fps
+[   0][     800], R/ep=   nan, eps=1.00, loss=  1.6527, meanQ=  0.316,    44 fps
+[   1][    1008], R/ep= -0.90, eps=1.00, loss=  1.9460, meanQ=  0.515,    25 fps
+[   1][    1200], R/ep= -0.90, eps=1.00, loss=  1.4840, meanQ=  0.454,    23 fps
+[   1][    1408], R/ep= -0.90, eps=1.00, loss=  0.7448, meanQ=  0.399,    20 fps
+[   1][    1600], R/ep= -0.90, eps=1.00, loss=  1.1867, meanQ=  0.389,    19 fps
+[   1][    1808], R/ep= -0.90, eps=1.00, loss=  0.7872, meanQ=  0.357,    17 fps
+[   1][    2000], R/ep= -0.90, eps=0.99, loss=  0.5483, meanQ=  0.314,    17 fps
+
+done: 1 episodes in 2.0 min (17 fps), final_eps=0.994, ran_steps=2000, requested_steps=2000
+score over 1 episodes: 0.00%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
