@@ -1,47 +1,26 @@
 """Stage 17 -- an inventory side-input (docs/beyond-c1-c2-c3.md §4, #5).
 
-THE OBSERVATION, NOT THE ALGORITHM, MAY BE THE BOTTLENECK. The agent sees one
-64x64 RGB frame and nothing else. Its own inventory and vitals are in there,
-but only as small HUD icons at the bottom of the image, and the champion's
-encoder is a three-layer stride-1 conv stack whose receptive field is 5x5 --
-it has to COUNT ICONS to know whether it holds a wood pickaxe, with a net
-that cannot count.
+The agent sees one 64x64 frame. Its inventory and vitals are in there, but
+only as small HUD icons, and stage 02's encoder has a 5x5 receptive field --
+it has to count icons with a net that cannot count. Almost every decision in
+Crafter is inventory-gated, and the champion makes a wood pickaxe in 18% of
+episodes and then barely uses it.
 
-That matters because almost every decision in Crafter is inventory-gated.
-"Should I walk to the mountain" depends on holding a wood pickaxe;
-make_stone_pickaxe depends on wood AND stone AND standing by a table. The
-champion makes a wood pickaxe in 18% of episodes and then almost never uses
-it -- consistent with an agent that cannot reliably read what it is holding.
+--inv-input concatenates the 16 inventory/vital counts onto the features
+before the head, normalised by their data.yaml max of 9. --no-inv-input is
+the control arm: same code path, same parameter count, zeroed side-input.
 
-THE CHANGE. Concatenate the 16 inventory/vital counts onto the features just
-before the final linear layer:
+Chosen over the doc's other option, frame stacking, because 4 frames would
+force --buffer-size down from 500000 and so confound the comparison.
 
-    features (lin_size) ++ inventory (16)  ->  Linear -> 17 actions
+Privileged state, more so than the mask: the mask only removed actions that
+provably did nothing, this hands over state the agent was meant to infer
+from pixels. Report it against our own baseline, not the Crafter paper's.
 
-16 numbers, normalised by their data.yaml maxima so everything is in [0, 1]
-(counts clamp at 9, so /9; the four vitals share that max). ~15 lines of net.
-
-WHY THIS OVER FRAME STACKING, WHICH THE DOC ALSO OFFERS. Stacking 4 frames is
-12 channels and 4x the buffer, which at --buffer-size 500000 does not fit in
-the RAM the champion's runs already use -- it would force --buffer-size
-200000 and so confound the contribution with a smaller buffer. The side-input
-costs 16 floats per transition and leaves every other flag where it is.
-
-PRIVILEGED STATE, AGAIN, AND MORE SO THAN THE MASK. The mask only ever
-removed actions that provably did nothing; this hands the agent a clean
-reading of state it was supposed to infer from pixels. It is the same
-declared-affordance framing as common/masking.py, and it must be reported the
-same way: against our own baseline, never against the Crafter paper's
-pixels-only table. --inv-input off is the control arm and runs the same code
-path with a zeroed side-input.
-
-THE SHAPE TRAP. The side-input has to reach the net at BOTH call sites --
-acting (one state) and learning (a batch of states and a batch of next
-states) -- and the next-state inventory is NOT the current one. Storing it in
-the replay tuple is therefore not optional; a stage that passed the current
-inventory for both would train against a target conditioned on the wrong
-state, and nothing would crash. tests/test_inventory_input.py checks the
-alignment.
+The side-input has to reach the net when acting (one state) and when
+learning (a batch of states and of next states), and s_'s inventory is not
+s's -- so both go in the replay tuple. Pairing them wrong trains the target
+on the wrong state's inventory without raising anything.
 
 Run:
     python stage_17_inventory_input/train.py --test-invinput
@@ -66,26 +45,21 @@ from stage_02_dqn.train import (DEVICE, ByteToFloat, DQN, ReplayMemory, View,
 
 STAGE_ID = 'stage_17_inventory_input'
 
-# crafter/data.yaml items:, in a fixed order. The order is frozen here
-# because it is baked into the net's input layer -- read it from a dict's
-# iteration order and a python version bump silently permutes the features.
+# crafter/data.yaml items:. The order is baked into the net's input layer,
+# so it is frozen here rather than taken from a dict's iteration order.
 INV_KEYS = ('health', 'food', 'drink', 'energy',
             'sapling', 'wood', 'stone', 'coal', 'iron', 'diamond',
             'wood_pickaxe', 'stone_pickaxe', 'iron_pickaxe',
             'wood_sword', 'stone_sword', 'iron_sword')
 N_INV = len(INV_KEYS)
 
-# Every one of them has max 9 in data.yaml items:, vitals included.
+# data.yaml gives all of them max 9, vitals included.
 INV_MAX = 9.0
 
 
 def inv_vector(info):
-    """info -> (16,) float32 in [0, 1]. Zeros when info has no inventory.
-
-    Zeros on a missing inventory is the same permissive convention
-    common/masking.py uses for a reset's empty info: it is also exactly what
-    the --inv-input control arm feeds, so the two agree.
-    """
+    """info -> (16,) float32 in [0, 1]. Zeros when info has no inventory,
+    which is also what the control arm feeds."""
     out = np.zeros(N_INV, dtype=np.float32)
     inv = (info or {}).get('inventory')
     if inv is None:
@@ -96,13 +70,10 @@ def inv_vector(info):
 
 
 class InvQNet(nn.Module):
-    """The champion's conv stack, with the inventory joined on at the end.
+    """Stage 02's conv stack with the inventory joined on before the head.
 
-    The conv trunk is byte-for-byte stage 02's get_estimator so that
-    --inv-input off reproduces the champion's architecture exactly -- the only
-    difference is a 16-wide block of zeros concatenated before the head, which
-    contributes nothing but keeps the parameter count and the code path
-    identical across the two arms.
+    The trunk matches get_estimator exactly, so --no-inv-input reproduces the
+    champion's architecture with a 16-wide block of zeros in place.
     """
 
     def __init__(self, n_actions=N_ACTIONS, input_ch=OBS_SHAPE[2],
@@ -125,8 +96,7 @@ class InvQNet(nn.Module):
             flat = self.conv(probe).shape[1]
         self.fc = nn.Sequential(nn.Linear(flat, lin_size),
                                 nn.ReLU(inplace=True))
-        # The join. N_INV extra inputs whether or not they are used, so the
-        # control arm has the same parameter count as the treatment.
+        # N_INV extra inputs either way, so both arms have the same count.
         self.head = nn.Linear(lin_size + N_INV, n_actions)
 
     def forward(self, obs, inv=None):
@@ -141,10 +111,7 @@ class InvQNet(nn.Module):
 class InvReplayMemory(ReplayMemory):
     """Stage 02's deque, eight-tuples: (s, a, r, s_, mask, legal_, inv, inv_).
 
-    inv and inv_ are the inventory vectors of s and s_ RESPECTIVELY. They are
-    different, and pairing them wrong trains the target on the wrong state's
-    inventory without raising. The two are stored separately for exactly that
-    reason.
+    inv belongs to s and inv_ to s_; they differ, so they are stored apart.
     """
 
     def sample(self):
@@ -168,9 +135,8 @@ class InvDoubleDQN(DQN):
     def __init__(self, *args, use_inv=True, **kwargs):
         super().__init__(*args, **kwargs)
         self._use_inv = use_inv
-        # The CURRENT inventory per env, set by train() before step() and
-        # consumed by it. Kept here rather than passed positionally because
-        # stage 02's step(states, masks) signature is shared by every stage.
+        # Set by train() before each step(). Held here rather than passed in,
+        # because step(states, masks) is the signature every stage shares.
         self._cur_inv = np.zeros((self._num_envs, N_INV), dtype=np.float32)
 
     def step(self, states, masks=None):
@@ -221,8 +187,8 @@ class InvDoubleDQN(DQN):
     def _update(self, states, actions, rewards, states_, mask, legal_,
                 inv, inv_):
         with torch.no_grad():
-            # inv_ with states_, on BOTH nets. Using inv here instead is the
-            # silent bug this stage's test exists to catch.
+            # inv_ with states_, on both nets: inv here would be the silent
+            # bug test_invinput checks for.
             actions_ = _apply_mask(self._estimator(states_, inv_),
                                    legal_).argmax(1, keepdim=True)
             q_values_ = self._target_estimator(states_, inv_)
@@ -241,11 +207,7 @@ class InvDoubleDQN(DQN):
 def train(agent, env, step_num=100_000, log_every=10_000,
           use_mask=False, mask_extended=False, mask_skip_grass=False,
           ckpt_path=None, ckpt_every=0, start_step=0, start_episodes=0):
-    """Stage 02's loop, carrying the inventory vectors alongside the frames.
-
-    Copied rather than parameterised, for the same reason stage 16 copies it:
-    stage 02's train() is the reference loop every other stage shares.
-    """
+    """Stage 02's loop, carrying the inventory vectors with the frames."""
     import signal
     import time
     from collections import deque
@@ -271,8 +233,7 @@ def train(agent, env, step_num=100_000, log_every=10_000,
         signal.signal(signal.SIGTERM, _on_term)
     masks = None
     done_steps = start_step
-    # reset() returns no info, so the first step acts on zeros -- which is
-    # also what a fresh player's normalised inventory very nearly is.
+    # reset() returns no info, so the first step acts on zeros.
     cur_inv = np.zeros((num_envs, N_INV), dtype=np.float32)
 
     for step in range(start_step, step_num, num_envs):
@@ -288,10 +249,9 @@ def train(agent, env, step_num=100_000, log_every=10_000,
             masks = legal_masks(infos, dones, extended=mask_extended,
                                 skip_grass=mask_skip_grass)
 
-        # next_inv[i] is s_'s inventory. On a done step VecEnv has already
-        # reset, so infos[i] is the DYING step's info -- which is correct
-        # here: it is the inventory the final transition ended with, and
-        # mask=0 means the learner never bootstraps off it anyway.
+        # On a done step infos[i] is the dying step's, which is the right
+        # inventory for the final transition; mask=0 means it is never
+        # bootstrapped off anyway.
         next_inv = np.stack([inv_vector(info) for info in infos])
 
         for i in range(num_envs):
@@ -310,9 +270,8 @@ def train(agent, env, step_num=100_000, log_every=10_000,
                 episodes += 1
 
         states = states_
-        # The next loop's current inventory is this step's next -- except on
-        # a done, where the env has reset and the new episode's first frame
-        # has a fresh player. Zeros there, matching the reset convention.
+        # Next step's current inventory is this step's next, except after a
+        # done where the env has reset: zeros there, as at reset.
         cur_inv = next_inv.copy()
         for i in range(num_envs):
             if dones[i]:
@@ -367,7 +326,7 @@ def build(args, capacity):
 def test_invinput():
     ok = True
 
-    # -- inv_vector: order frozen, scaled to [0, 1], permissive on empty ---
+    # -- inv_vector: fixed order, scaled to [0, 1], zeros on empty --------
     info = {'inventory': {k: 0 for k in INV_KEYS}}
     info['inventory']['wood'] = 9
     info['inventory']['health'] = 9
@@ -381,7 +340,7 @@ def test_invinput():
     if inv_vector(None).any() or inv_vector({}).any():
         print('FAIL missing inventory should give zeros'); ok = False
 
-    # -- the net takes the side-input and actually USES it -----------------
+    # -- the net takes the side-input and uses it -------------------------
     batch = 4
     obs = torch.randint(0, 256, (batch, 3, 64, 64), dtype=torch.uint8).to(DEVICE)
     net = InvQNet(lin_size=64, use_inv=True).to(DEVICE)

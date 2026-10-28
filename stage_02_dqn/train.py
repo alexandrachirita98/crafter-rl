@@ -449,9 +449,8 @@ def train(agent, env, step_num=100_000, log_every=10_000,
     keeps every run recorded before masking existed reproducible.
 
     mask_extended adds the `do`, `sleep` and movement rules (stage 14);
-    mask_skip_grass additionally forbids `do` at grass, which is a behavioural
-    prior rather than a legality rule. Both are off by default so --mask alone
-    reproduces 1m_fix_mask exactly.
+    mask_skip_grass also forbids `do` at grass. Both off by default, so
+    --mask alone reproduces 1m_fix_mask.
     """
     num_envs = env.num_envs
     ep_reward = np.zeros(num_envs, dtype=np.float64)

@@ -1,53 +1,24 @@
 """Stage 14 -- the extended action mask (docs/beyond-c1-c2-c3.md §3, #3).
 
-The champion's single biggest win is legal-action masking: at 200k with 16
-envs it took the score from 3.25% to 4.56%. But common/masking.py only ever
-masked actions 7-16, the four place_* and six make_*. Actions 0-6 -- noop,
-the four moves, `do` and `sleep` -- were hardcoded always-legal, including
-`do`, which is the single most important button in the game.
+common/masking.py only masked actions 7-16, the place_* and make_*. Actions
+0-6 -- noop, the four moves, `do`, `sleep` -- were always legal. This stage
+adds three rules behind --mask-extended:
 
-This stage finishes the job. Three rules, in common/masking.py:
+  1. `do` only when the faced tile is collectable and the tool is held.
+  2. `sleep` only below full energy.
+  3. a move only when it is not both blocked and already faced.
 
-  1. `do` is masked unless the tile the player FACES is something `do` acts
-     on and the tool requirement is met. Stone and coal need a wood pickaxe,
-     iron a stone pickaxe, diamond an iron pickaxe (data.yaml collect:).
-  2. `sleep` is masked at full energy -- objects.py:115 gates on
-     energy < max, so the press is a guaranteed no-op.
-  3. A move is masked only when the target tile is unwalkable AND the player
-     already faces it.
+Rule 3 needs the facing check: a blocked move turns the player instead of
+moving, which is how the agent aims, so masking every blocked move would
+leave it unable to line up a `do`. Crafter's info has no facing field;
+common/env.py adds info['player_facing'].
 
-RULE 3 IS THE DANGEROUS ONE AND IT IS WHY THE FACING CHECK IS THERE. In
-Crafter, Player._move sets facing FIRST and then tries to step
-(objects.py:174-177), so a move into a tile you cannot enter TURNS you to
-face it -- which is exactly how the agent lines up a `do`. Masking every
-blocked move would leave it unable to aim. Masking only the moves that are
-redundant as turns is provably a no-op, which is what
-tests/test_masking_extended.py checks by replaying every masked action in a
-deepcopy of the env.
+--mask-skip-grass also forbids `do` at grass. Grass is collectable (sapling
+at p=0.1), so that one can forbid an action that would have worked -- it is a
+separate arm and reported separately.
 
-WHAT THIS BUYS, MEASURED, NOT ASSUMED. Over 10k random steps the extended
-mask takes the mean legal-action count from 7.16 to 6.49 of 17. `do` is
-masked on only 3.9% of steps -- far less than the doc assumed, because the
-agent faces GRASS on 84.4% of steps and `do` at grass is legal: data.yaml
-gives a sapling with probability 0.1. So the strict rule is a small prune.
-
-Hence --mask-skip-grass, a SECOND and weaker-justified arm: it also forbids
-`do` at grass, taking the masked fraction to 92.6% of steps. collect_sapling
-is already at 91% in the champion, so those presses buy an achievement that
-is long since solved -- but it is a behavioural prior, not a legality rule,
-and it is the one part that can forbid an action that would have worked. It
-is reported as its own arm, never folded into the headline number.
-
-FACING IS NOT IN CRAFTER'S info DICT. common/env.py's VecEnv adds
-info['player_facing'] by reading env._player.facing -- an attribute read, so
-it cannot change dynamics, verified by replaying a fixed action list with and
-without the read. Patching crafter/env.py would have invalidated every
-measurement taken before the change, which is that file's own rule.
-
-PRIVILEGED STATE, SAID OUT LOUD. The mask reads inventory, the semantic map
-and now facing: none of it is in the 64x64 image. Report masked numbers only
-against our own masked baseline, never against the Crafter paper's
-pixels-only table.
+The mask reads inventory, the semantic map and facing, none of which is in
+the image. Compare masked runs only against our own masked baseline.
 
 Run:
     python stage_14_extended_mask/train.py --test-extmask
@@ -83,11 +54,7 @@ def extra_args(p):
 
 
 def build(args, capacity):
-    """Unchanged from stage 03: the contribution is in the mask, not the net.
-
-    Deliberately identical so that --mask-extended on/off is a one-flag
-    comparison with the same code path on both sides (docs §6 rule 1).
-    """
+    """Stage 03's net and buffer, so --mask-extended is the only difference."""
     net = get_estimator(N_ACTIONS, lin_size=args.lin_size, stride=args.stride)
     buffer = ReplayMemory(size=capacity, batch_size=args.batch_size)
     return net, buffer, {}
@@ -97,11 +64,10 @@ def build(args, capacity):
 
 
 def test_extmask():
-    """The three rules on hand-built info dicts, plus a no-op probe.
+    """The three rules on hand-built info dicts.
 
-    tests/test_masking_extended.py is the real suite -- it replays every
-    masked action in a deepcopy of the env, both directions. This is the
-    smoke check run.sh wires up automatically.
+    tests/test_masking_extended.py is the real suite; it replays every masked
+    action in a deepcopy of the env. This is the smoke check run.sh wires up.
     """
     import crafter
 
@@ -132,7 +98,7 @@ def test_extmask():
     if legal_mask(info, extended=True)[DO] != 1.0:
         print('FAIL do at stone WITH a pickaxe should be legal'); ok = False
 
-    # -- rule 3: the aiming trap. Facing away, a blocked move still turns us.
+    # -- rule 3: facing away, a blocked move still turns us, so stays legal.
     info['player_facing'] = (0, -1)
     if legal_mask(info, extended=True)[4] != 1.0:
         print('FAIL blocked move must stay legal when not already facing it')
@@ -141,7 +107,7 @@ def test_extmask():
     if legal_mask(info, extended=True)[4] != 0.0:
         print('FAIL move into a faced unwalkable tile is a no-op'); ok = False
 
-    # -- skip_grass is opt-in and separate from legality.
+    # -- grass is collectable, so only skip_grass may mask it.
     info['semantic'][x, y + 1] = GRASS_ID
     if legal_mask(info, extended=True)[DO] != 1.0:
         print('FAIL grass is collectable: plain extended must leave do legal')
@@ -149,7 +115,7 @@ def test_extmask():
     if legal_mask(info, extended=True, skip_grass=True)[DO] != 0.0:
         print('FAIL --mask-skip-grass should forbid do at grass'); ok = False
 
-    # -- no facing: the facing rules must be skipped, not guessed.
+    # -- without facing, the facing rules are skipped rather than guessed.
     noface = dict(info)
     del noface['player_facing']
     m = legal_mask(noface, extended=True)

@@ -1,15 +1,9 @@
 """Tests for the stage 14-17 variants from docs/beyond-c1-c2-c3.md.
 
-Each stage carries its own --test-* self-test, which run.sh invokes
-automatically. These are the checks worth having in the pytest suite because
-they guard the silent failure modes -- the ones that train happily and learn
-the wrong thing:
-
-  stage 16: the bonus must pay once per item per EPISODE, and must decay to
-            exactly 0 so the final policy optimises the true reward.
-  stage 17: inv_ must be paired with s_, never with s. Pairing them wrong
-            trains the target on the wrong state's inventory and nothing
-            raises.
+Each stage also carries a --test-* self-test that run.sh invokes. These cover
+the failure modes that train happily and learn the wrong thing: stage 16's
+bonus paying per run instead of per episode or not decaying to 0, and stage
+17 pairing inv_ with s instead of s_.
 """
 
 import importlib

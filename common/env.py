@@ -142,12 +142,10 @@ class VecEnv:
                 # recorded rather than acted on, and costs one dict entry.
                 info = dict(info, final_obs=ob)
                 ob = env.reset()
-            # Facing is not in Crafter's info dict, but the extended action
-            # mask needs it: `do` and the four moves all act on the one tile
-            # the player faces. Read straight off the player -- an attribute
-            # read, so it cannot change dynamics (Recorder forwards getattr).
-            # Patching crafter/env.py instead would invalidate every
-            # measurement taken before the change, per this file's own rule.
+            # The extended mask needs facing, which Crafter's info lacks.
+            # An attribute read, so it cannot change dynamics (Recorder
+            # forwards getattr); patching crafter/env.py would invalidate
+            # every measurement taken before the change.
             info = dict(info, player_facing=tuple(env._player.facing))
             obs.append(ob)
             rewards.append(reward)

@@ -1,16 +1,9 @@
 """Tests for the extended action mask (do / sleep / movement).
 
-The doc that proposed this warned that getting movement masking wrong makes
-the agent unable to aim, because in Crafter a blocked move TURNS you rather
-than doing nothing. So the important tests here are the two engine-agreement
-ones, and they check BOTH directions:
-
-  test_extended_never_masks_a_live_action -- the fatal direction. Replays every
-      masked action in a deepcopy of the env and asserts it really was a no-op.
-  test_extended_masked_actions_are_noops  -- the cheap direction, same shape as
-      test_agrees_with_engine in test_masking.py.
-
-A mask that merely agrees with my reading of data.yaml proves nothing.
+The two engine-agreement tests are the ones that matter, and they check both
+directions: that no masked action would have worked (replayed in a deepcopy
+of the env), and that masked actions really are no-ops. Agreeing with a
+reading of data.yaml would prove nothing on its own.
 """
 
 import copy
@@ -46,11 +39,9 @@ def _info(env):
 def _changed(before, after, was_sleeping):
     """Did the action change anything the player controls?
 
-    wake_up is excluded when the player was asleep: update() clears sleeping
-    at full energy whatever button was pressed, so the achievement belongs to
-    the sleep state, not to the action. Without this exclusion the test
-    reports ~170 false violations -- and reports them for the ORIGINAL mask
-    too, which is how we know it is the test and not the mask.
+    wake_up is excluded while asleep: update() clears sleeping at full energy
+    whatever button was pressed, so it belongs to the state, not the action.
+    Without the exclusion the test fires ~170 times on the original mask too.
     """
     inv0, ach0, pos0, fac0 = before
     inv1, ach1, pos1, fac1 = after

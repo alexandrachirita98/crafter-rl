@@ -157,14 +157,10 @@ def _do_is_live(target, inv, skip_grass=False):
     objects over the material beneath, so an Arrow standing on a tree hides
     the tree).
 
-    skip_grass also masks `do` at grass. Grass IS collectable -- data.yaml
-    gives a sapling with probability 0.1 -- so strictly it is a legal press
-    and the default leaves it alone. But the agent faces grass on ~84% of
-    steps (measured over 10k random steps) while collect_sapling already sits
-    at 91%, so those presses buy an achievement that is long since solved.
-    This is a behavioural prior, not a legality rule; it is the one part of
-    the extended mask that can forbid something that would have worked, so it
-    is a separate flag and is reported separately.
+    skip_grass also masks `do` at grass. Grass is collectable (data.yaml
+    gives a sapling at p=0.1), so that is a behavioural prior rather than a
+    legality rule -- the one part that can forbid something that would have
+    worked. Hence the separate flag.
     """
     if target is None:
         return True
@@ -180,23 +176,22 @@ def _do_is_live(target, inv, skip_grass=False):
         # A material not in data.yaml collect: -- path, sand, table, furnace,
         # lava, or the 0 'unknown' id. `do` on it is a guaranteed no-op.
         return False
-    # Collectable, but only with the right tool. This is the stone case: the
-    # whole point of the rule is that `do` at stone with no wood pickaxe
-    # returns early (objects.py:222) and teaches the agent nothing.
+    # Collectable, but only with the right tool: `do` at stone with no wood
+    # pickaxe returns early (objects.py:222) and teaches nothing.
     return all(inv.get(k, 0) >= v for k, v in req.items())
 
 
 def _extend_mask(mask, info, inv, sem, pos, skip_grass=False):
     """The three extra rules: `do`, `sleep`, movement. Mutates `mask`.
 
-    Needs player_facing, which Crafter's own info does not carry -- common/env.py's
-    VecEnv adds it. Without it the facing-dependent rules are skipped rather
-    than guessed, so a caller on a bare crafter.Env keeps the base mask.
+    Needs player_facing, which Crafter's info does not carry -- VecEnv adds
+    it. Without it the facing rules are skipped rather than guessed, so a
+    caller on a bare crafter.Env keeps the base mask.
     """
     facing = info.get('player_facing')
 
-    # -- rule 2: sleep. Sleeping at full energy does nothing at all
-    # (objects.py:115 gates on energy < max), it just wastes the step.
+    # -- rule 2: sleeping at full energy does nothing (objects.py:115 gates
+    # on energy < max), it just wastes the step.
     if inv.get('energy', 0) >= ENERGY_MAX:
         mask[SLEEP] = 0.0
 
@@ -208,15 +203,10 @@ def _extend_mask(mask, info, inv, sem, pos, skip_grass=False):
     if not _do_is_live(_tile(sem, pos, facing), inv, skip_grass):
         mask[DO] = 0.0
 
-    # -- rule 3: movement. THE TRAP. A move into a tile you cannot enter is
-    # not a no-op: Player._move sets facing FIRST and then tries to step
-    # (objects.py:174-177), so a blocked move TURNS you, which is how the
-    # agent lines up a `do`. Masking every blocked move would make it unable
-    # to aim at a tree it is standing beside.
-    #
-    # So mask a move only when it is BOTH blocked AND redundant as a turn --
-    # i.e. the player already faces that way. Then it provably does nothing:
-    # facing is already set and the step fails.
+    # -- rule 3: a blocked move is not a no-op. Player._move sets facing
+    # first and then tries to step (objects.py:174-177), so it turns you,
+    # which is how the agent aims. Mask a move only when it is blocked AND
+    # the player already faces that way, where it provably does nothing.
     for action, direction in _MOVE_DIR.items():
         if tuple(facing) != direction:
             continue                     # still useful as a turn
@@ -236,10 +226,10 @@ def _extend_mask(mask, info, inv, sem, pos, skip_grass=False):
 def legal_mask(info, extended=False, skip_grass=False):
     """-> (17,) float32, 1.0 where the action could do something.
 
-    With extended=False only the place/make actions are ever masked and
-    actions 0-6 are always legal, which is the mask every run up to
-    1m_fix_mask used. extended=True adds the `do`, `sleep` and movement rules
-    -- see _extend_mask. It is opt-in so the old runs stay reproducible.
+    With extended=False only the place/make actions are masked and actions
+    0-6 are always legal, which is the mask every run up to 1m_fix_mask
+    used. extended=True adds the `do`, `sleep` and movement rules; it is
+    opt-in so those runs stay reproducible.
 
     Returns all-ones when info lacks the keys, so a caller holding a reset's
     empty info does not forbid everything.

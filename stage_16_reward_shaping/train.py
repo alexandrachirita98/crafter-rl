@@ -1,47 +1,23 @@
 """Stage 16 -- reward shaping on inventory firsts (docs/beyond-c1-c2-c3.md §3, #4).
 
-THE PROBLEM, IN ONE SENTENCE. Between "I have a wood pickaxe" (the champion
-gets one in 18% of episodes) and "I am standing on stone" there are ~30-60
-steps with zero reward, so nothing in the learning signal ever says that
-walking toward the mountain was a good idea. The champion's achievement
-profile is exactly this shape: the easy five are solved (collect_wood 86%,
-place_table 68%, collect_sapling 91%) and everything from collect_stone down
-is <= 3.4%.
+Between holding a wood pickaxe and standing on stone there are ~30-60 steps
+with no reward, so nothing tells the agent that walking toward the mountain
+was worth it. This adds a bonus the first time each target item appears:
 
-THE FIX. A small bonus the first time per episode each target item appears in
-the inventory:
+    --shape-items stone,coal,iron,diamond  --shape-bonus 0.1
 
-    --shape-items stone,coal,iron,diamond     --shape-bonus 0.1
+Training uses the shaped reward; the reported score does not. stats.jsonl and
+info['reward'] are untouched, so the number stays comparable to other runs.
 
-Train on the shaped reward, REPORT the true one. Crafter's info['reward'] is
-the real environment reward and stats.jsonl records achievements, neither of
-which this stage touches, so the score remains comparable to every other run.
+Two guards against farming the bonus: it pays only on the first increase of
+each item per episode, and --shape-decay-steps takes it linearly to 0 over
+the last N steps so the measured policy optimises the true reward. Run
+--shape-bonus 0 in the same batch as the control.
 
-WHY IT MIGHT NOT WORK, STATED UP FRONT. Shaping invites the agent to farm the
-bonus instead of playing -- collect one stone, die, repeat. Two guards, both
-from the doc:
-
-  (a) FIRST UNIT PER EPISODE ONLY. The bonus pays on the first increase of
-      each item in an episode and never again, so there is nothing to farm.
-      Implemented as a per-env set of already-paid items, cleared on done.
-  (b) DECAY TO ZERO. --shape-decay-steps makes the bonus fall linearly to 0
-      over the last N env steps, so the final policy optimises the true
-      reward. Default 300k of a 1M run, per the doc.
-
-This is potential-based reward shaping's informal cousin (Ng, Harada & Russell
-1999). SAY WHICH PART OF THAT THEORY THIS SATISFIES AND WHICH IT DOES NOT: a
-potential-based shaping F(s,s') = gamma*phi(s') - phi(s) provably leaves the
-optimal policy unchanged. THIS IS NOT THAT. A one-off bonus on an inventory
-first is not a difference of potentials over a Markov state -- "already paid"
-is episode history, not state -- so the invariance theorem does NOT apply and
-the optimal policy CAN shift. Guard (b) is what brings it back: with the
-bonus at 0 for the last 300k steps, the policy being measured is optimising
-the true reward. Report the --shape-bonus 0 control in the same batch.
-
-WHERE IT PLUGS IN. train() reads rewards[i] out of env.step and hands it to
-agent.learn(). Shaping belongs between those two, so this stage overrides
-learn() rather than touching stage 02's loop -- which keeps every other
-stage's reward path untouched.
+This is not potential-based shaping in Ng, Harada & Russell's sense -- a
+one-off bonus on "already paid" episode history is not a difference of
+potentials over a Markov state, so the policy-invariance result does not
+apply and the optimum can shift. The decay is what brings it back.
 
 Run:
     python stage_16_reward_shaping/train.py --test-shaping
@@ -62,19 +38,16 @@ from stage_03_double.train import DoubleDQN
 
 STAGE_ID = 'stage_16_reward_shaping'
 
-# The four items on the far side of the wall. Everything the champion already
-# gets (wood, sapling) is deliberately absent: paying for a solved
-# achievement buys nothing and only adds variance.
+# The four items past the wall. Wood and sapling are left out: the champion
+# already gets them, so paying for them only adds variance.
 DEFAULT_SHAPE_ITEMS = ('stone', 'coal', 'iron', 'diamond')
 
 
 class ShapedDoubleDQN(DoubleDQN):
     """Stage 03, with a first-per-episode inventory bonus added to reward.
 
-    THE BONUS NEVER REACHES THE LOGS. stats.jsonl is written by the Recorder
-    inside the env and records achievements; info['reward'] is the env's own.
-    This class only changes the number that goes into the replay buffer, so
-    the reported score is the true one -- which is the whole point.
+    Only the number entering the replay buffer changes; stats.jsonl is
+    written by the Recorder inside the env, so the reported score is true.
     """
 
     def __init__(self, *args, shape_items=DEFAULT_SHAPE_ITEMS,
@@ -85,26 +58,18 @@ class ShapedDoubleDQN(DoubleDQN):
         self._shape_bonus = shape_bonus
         self._shape_decay_steps = shape_decay_steps
         self._total_steps = total_steps
-        # Per env: the items already paid for in the CURRENT episode, and the
-        # previous step's inventory. One set per env -- with 16 envs a single
-        # shared set would let env 0's first stone silence env 1's.
+        # One set per env: a shared set would let env 0's first stone
+        # silence env 1's.
         self._paid = [set() for _ in range(self._num_envs)]
         self._prev_inv = [None] * self._num_envs
-        # Counters for the log line, so the deck can report how much shaped
-        # reward was actually paid rather than how much was configured.
+        # For the log line: how much bonus was actually paid.
         self.shaped_total = 0.0
         self.shaped_events = 0
-        # Env steps so far, for the decay. train() below keeps it current;
-        # the decay is a no-op while it is 0, which is what the self-test
-        # exercises directly.
+        # Env steps so far, for the decay; train() below keeps it current.
         self._env_steps = 0
 
     def _bonus_now(self, env_steps):
-        """The bonus at this point in training. Linear decay to 0 at the end.
-
-        With shape_decay_steps = 300k on a 1M run, the bonus is full until
-        700k and 0 at 1M, so the last 300k steps optimise the true reward.
-        """
+        """The bonus now. Linear decay to 0 over the last decay_steps."""
         if self._shape_bonus == 0.0 or self._shape_decay_steps <= 0:
             return self._shape_bonus
         if not self._total_steps:
@@ -131,8 +96,7 @@ class ShapedDoubleDQN(DoubleDQN):
         for item in self._shape_items:
             if item in self._paid[i]:
                 continue
-            # Strictly an INCREASE. Crafter clamps inventory at 9 and items
-            # get spent on crafting, so `> 0` would re-pay after every spend.
+            # Strictly an increase: `> 0` would re-pay after every spend.
             if inv.get(item, 0) > prev.get(item, 0):
                 self._paid[i].add(item)
                 extra += bonus
@@ -145,19 +109,14 @@ class ShapedDoubleDQN(DoubleDQN):
               info=None):
         """Shape the reward, then hand it to stage 02's learn() unchanged.
 
-        info is an extra keyword stage 02's train() does not pass, so this
-        stage ships its own train() below to supply it. Defaulting it to None
-        keeps the signature compatible with every other caller -- and with
-        info=None shape() is a pass-through, so a mis-wired loop degrades to
-        the unshaped baseline rather than crashing fifteen frames away.
+        info is supplied by this stage's own train(). It defaults to None, so
+        a loop that forgets it degrades to the unshaped baseline.
         """
         reward = self.shape(i, reward, info, self._env_steps)
         return super().learn(i, state, action, reward, state_, mask, legal_)
 
     def end_episode(self, i):
-        """New episode, new entitlement. Without this the bonus pays once per
-        RUN rather than once per episode, and the signal vanishes after the
-        first few thousand steps."""
+        """Without the clear, the bonus pays once per run, not per episode."""
         super().end_episode(i)
         self._paid[i].clear()
         self._prev_inv[i] = None
@@ -166,13 +125,10 @@ class ShapedDoubleDQN(DoubleDQN):
 def train(agent, env, step_num=100_000, log_every=10_000,
           use_mask=False, mask_extended=False, mask_skip_grass=False,
           ckpt_path=None, ckpt_every=0, start_step=0, start_episodes=0):
-    """Stage 02's loop with two lines added: keep agent._env_steps current,
-    and pass info to learn() so shape() can read the inventory.
+    """Stage 02's loop, plus _env_steps and info passed down to learn().
 
-    Copied rather than parameterised because stage 02's train() is the
-    reference loop every other stage shares, and threading a per-stage
-    reward hook through it would change the code path of runs that have
-    nothing to do with shaping.
+    Copied rather than hooked into stage 02's train(), which every other
+    stage shares.
     """
     import signal
     import time
@@ -212,19 +168,16 @@ def train(agent, env, step_num=100_000, log_every=10_000,
             masks = legal_masks(infos, dones, extended=mask_extended,
                                 skip_grass=mask_skip_grass)
 
-        # The decay reads this, so it must be the step count BEFORE the
-        # batch is learned from -- not after, or the last batch of the run
-        # is shaped with a bonus the schedule says is already zero.
+        # Before the batch is learned from, not after: otherwise the run's
+        # last batch is shaped with a bonus the schedule has already zeroed.
         agent._env_steps = step
 
         for i in range(num_envs):
             next_state = states_[i]
             if dones[i] and 'final_obs' in infos[i]:
                 next_state = infos[i]['final_obs']
-            # THE ONE CHANGED LINE: info goes in, so shape() can see the
-            # inventory. On a done step infos[i] is the DYING step's info,
-            # which is the right one -- that is the inventory the last
-            # transition ended with.
+            # info goes in so shape() sees the inventory. On a done step
+            # infos[i] is the dying step's, which is the right one here.
             agent.learn(i, states[i], actions[i], rewards[i], next_state,
                         bootstrap_mask(dones[i], infos[i]),
                         masks[i] if use_mask else None,
@@ -281,7 +234,7 @@ def extra_args(p):
 
 
 def build(args, capacity):
-    """Stage 03's net and buffer: the contribution is the reward, not the net."""
+    """Stage 03's net and buffer: the change is the reward, not the net."""
     net = get_estimator(N_ACTIONS, lin_size=args.lin_size, stride=args.stride)
     buffer = ReplayMemory(size=capacity, batch_size=args.batch_size)
     items = tuple(s.strip() for s in args.shape_items.split(',') if s.strip())

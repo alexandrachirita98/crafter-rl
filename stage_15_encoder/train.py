@@ -1,54 +1,21 @@
-"""Stage 15 -- the encoder is the bottleneck (docs/beyond-c1-c2-c3.md §3, #1).
+"""Stage 15 -- the conv encoder (docs/beyond-c1-c2-c3.md §3, #1).
 
-THE CLAIM. Nine algorithmic stages (Double, n-step, dueling, QR, Munchausen,
-PER, ez-greedy, DrQ) all sat at 1.7-2.4% at 200k, while two non-algorithmic
-changes -- 16 parallel envs and action masking -- moved the same agent to
-4.6%. That says the binding constraint on Crafter at this budget is not the
-RL algorithm. This stage tests the next non-algorithmic suspect: the conv
-encoder, which nobody ever tuned.
+Nine algorithmic stages all sat at 1.7-2.4% at 200k while two
+non-algorithmic changes (16 envs, action masking) reached 4.6%, so this
+stage tests the next non-algorithmic suspect: the encoder, never tuned.
 
-WHAT THE CHAMPION'S ENCODER ACTUALLY IS (stage_02_dqn/train.py
-get_estimator, the course lab's net, measured not guessed):
+stage 02's get_estimator is three stride-1 convs (64x64 -> 60x60, a 5x5
+receptive field) followed by Linear(57600, 64), which holds 99.9% of its
+3.69M parameters and is spatially blind. Crafter tiles are ~7px, so the
+convs never form a whole-tile feature.
 
-    Conv2d(3, 16, k=3, s=1) -> 62x62      3,690,097 params total
-    Conv2d(16,16, k=2, s=1) -> 61x61      of which Linear(57600, 64)
-    Conv2d(16,16, k=2, s=1) -> 60x60      is 3,686,464 -- 99.9%
-    Flatten                 -> 57,600
-    Linear(57600 -> 64)
-    Linear(64 -> 17)
+    --encoder lab      stage 02's net, the control arm.              3.69M
+    --encoder stride2  the same convs at stride 2, lin 512.           413k
+    --encoder nature   NatureCNN from common/networks.py.             609k
 
-Two things are wrong with it at once:
-
-  1. IT BARELY LOOKS AT THE IMAGE. Three stride-1 convs with k=3,2,2 shrink
-     64x64 to 60x60. Each output pixel summarises a 5x5 input window. Crafter
-     tiles are ~7px, so the net never forms a whole-tile concept, let alone
-     "there is a mountain to my left".
-  2. ALMOST ALL CAPACITY IS IN ONE SPATIALLY-BLIND LAYER. Linear(57600, 64)
-     treats pixel (3,7) and (3,8) as unrelated inputs, and squeezes the world
-     into 64 numbers before deciding anything -- position, facing, health,
-     food, drink, energy, nine inventory counts and nine visible tiles.
-
-THE EVIDENCE WE ALREADY HAD, AND WHAT IT RULES OUT. 200k_lin512_mask scored
-4.39/4.32 against the champion's 4.80/4.32: a tie. So widening the bottleneck
-ALONE does nothing -- which is what you would predict if the convolutions
-never built spatial features for it to read. That is why this stage is about
-the CONVOLUTIONS, and --lin-size is left to stage 02's flag.
-
-    --encoder lab      the champion's net. The control arm.           3.69M
-    --encoder stride2  the lab's convs with stride 2, lin 512.         413k
-                       Downsamples 64 -> 31 -> 15 -> 7. ~5x faster.
-    --encoder nature   NatureCNN from common/networks.py, unused        609k
-                       until now. Downsamples 64 -> 15 -> 6 -> 4,
-                       flatten 1024, bottleneck 512.
-
-NatureCNN is 6x SMALLER than the champion and has an 8x WIDER bottleneck.
-Both of those point the same way: the champion spends its parameters in the
-one place they cannot encode geometry.
-
-WHY stride2 IS WORTH RUNNING EVEN IF nature WINS. It is ~5x faster per step,
-so on a fixed RunPod budget it buys more seeds -- and with a seed-to-seed
-spread of 0.54 points on this champion, seeds are what the conclusion rests
-on.
+200k_lin512_mask already tied the champion, so widening the bottleneck alone
+does nothing; stride2 and nature are the arms that change the convolutions.
+stride2 also runs ~5x faster, which buys more seeds on a fixed budget.
 
 Run:
     python stage_15_encoder/train.py --test-encoder
@@ -75,12 +42,9 @@ STAGE_ID = 'stage_15_encoder'
 class NatureQ(torch.nn.Module):
     """common/networks.QNetwork behind stage 02's tensor convention.
 
-    THE ONE INCOMPATIBILITY, AND IT DOES NOT CRASH. common/networks.NatureCNN
-    takes NHWC uint8 and does its own permute and /255 (see its docstring).
-    stage 02's _to_tensor already hands us NCHW, because the lab's net starts
-    with ByteToFloat and a Conv2d. Feeding NCHW to NatureCNN would permute a
-    second time and convolve the wrong axes -- it would train, and learn
-    nothing. So permute back here, once, explicitly.
+    NatureCNN expects NHWC and permutes internally; stage 02's _to_tensor
+    hands out NCHW. Without the permute back it convolves the wrong axes and
+    trains on transposed images without crashing.
     """
 
     def __init__(self, n_actions=N_ACTIONS, features_dim=512):
@@ -101,9 +65,7 @@ def make_encoder(kind, args):
         return get_estimator(N_ACTIONS, lin_size=args.lin_size,
                              stride=args.stride)
     if kind == 'stride2':
-        # The flags exist on stage 02; this just pins the pair that the doc
-        # proposes, so the arm is one word on the command line and cannot be
-        # half-applied.
+        # stage 02 has both flags; pinning them here keeps the arm one word.
         return get_estimator(N_ACTIONS, lin_size=512, stride=2)
     if kind == 'nature':
         return NatureQ(N_ACTIONS, features_dim=args.lin_size
@@ -132,11 +94,7 @@ def build(args, capacity):
 
 
 def test_encoder():
-    """Every encoder must take stage 02's NCHW uint8 and return (B, 17).
-
-    The permute in NatureQ is the thing worth testing: get it wrong and the
-    net trains silently on transposed images.
-    """
+    """Every encoder takes stage 02's NCHW uint8 and returns (B, 17)."""
 
     class _Args:
         lin_size = 64
@@ -160,16 +118,13 @@ def test_encoder():
             ok = False
         print(f'  {kind:<8} {tuple(out.shape)}  {n:>10,} params')
 
-    # The permute is load-bearing. Feeding stage 02's NCHW straight to
-    # QNetwork makes it permute a second time, turning (B,3,64,64) into
-    # (B,64,3,64) -- 64 channels into a 3-channel conv. Here that raises,
-    # which is the good case; assert it does, so that if someone "simplifies"
-    # NatureQ away the test fails loudly instead of the agent learning
-    # nothing from transposed images.
+    # Feeding NCHW straight to QNetwork permutes twice, putting 64 channels
+    # into a 3-channel conv. Assert it raises, so dropping NatureQ's permute
+    # fails here instead of training silently on transposed images.
     nat = make_encoder('nature', _Args())
     try:
         with torch.no_grad():
-            nat.net(obs)          # the un-permuted path, i.e. the bug
+            nat.net(obs)          # the un-permuted path
     except RuntimeError:
         pass                      # expected: channel mismatch
     else:
