@@ -424,7 +424,8 @@ def load_ckpt(path, agent):
 
 
 def train(agent, env, step_num=100_000, log_every=10_000,
-          use_mask=False, ckpt_path=None, ckpt_every=0,
+          use_mask=False, mask_extended=False, mask_skip_grass=False,
+          ckpt_path=None, ckpt_every=0,
           start_step=0, start_episodes=0):
     """The lab's loop, over a VecEnv on Crafter's 4-tuple API.
 
@@ -446,6 +447,11 @@ def train(agent, env, step_num=100_000, log_every=10_000,
     64x64 image the agent sees -- so a masked score is not strictly comparable
     to the pixels-only numbers in the Crafter paper. Off by default, which
     keeps every run recorded before masking existed reproducible.
+
+    mask_extended adds the `do`, `sleep` and movement rules (stage 14);
+    mask_skip_grass additionally forbids `do` at grass, which is a behavioural
+    prior rather than a legality rule. Both are off by default so --mask alone
+    reproduces 1m_fix_mask exactly.
     """
     num_envs = env.num_envs
     ep_reward = np.zeros(num_envs, dtype=np.float64)
@@ -489,7 +495,8 @@ def train(agent, env, step_num=100_000, log_every=10_000,
             # masking the new state with it would forbid legal actions for a
             # whole episode's first step. legal_masks falls back to all-ones
             # wherever done is set.
-            masks = legal_masks(infos, dones)
+            masks = legal_masks(infos, dones, extended=mask_extended,
+                                skip_grass=mask_skip_grass)
 
         # The same masks go to the learner as state_'s legal set, and to the
         # next agent.step() as the current state's -- state_ IS the next
@@ -720,7 +727,10 @@ def main(argv=None, agent_cls=DQN, stage_id=STAGE_ID, extra_args=None,
 
     ran_steps, episodes, elapsed = train(
         agent, env, step_num=args.total_steps, log_every=args.log_every,
-        use_mask=args.mask, ckpt_path=ckpt_path, ckpt_every=args.ckpt_every,
+        use_mask=args.mask,
+        mask_extended=getattr(args, 'mask_extended', False),
+        mask_skip_grass=getattr(args, 'mask_skip_grass', False),
+        ckpt_path=ckpt_path, ckpt_every=args.ckpt_every,
         start_step=start_step, start_episodes=start_episodes)
 
     # final_eps printed explicitly: the progress lines are gated on
