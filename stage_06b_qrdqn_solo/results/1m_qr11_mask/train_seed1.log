@@ -1,0 +1,127 @@
+Setting all rngs to seed=1
+stage stage_06b_qrdqn_solo  seed 1  steps 1,000,000  envs 16  device cuda
+buffer 500,000 transitions = 12.3 GB host RAM
+logging to /tmp/crafter-sweep-5400/crafter_reward-stage_06b_qrdqn_solo/1/shard*/stats.jsonl
+[  53][   10000], R/ep=  1.20, eps=0.98, loss=  0.0674, meanQ=  0.179,    86 fps
+[ 113][   20000], R/ep=  1.60, eps=0.94, loss=  0.1454, meanQ=  0.719,    76 fps
+[ 170][   30000], R/ep=  2.40, eps=0.91, loss=  0.1808, meanQ=  1.277,    75 fps
+[ 231][   40000], R/ep=  2.30, eps=0.87, loss=  0.2965, meanQ=  1.585,    73 fps
+[ 287][   50000], R/ep=  2.00, eps=0.83, loss=  0.1665, meanQ=  2.051,    73 fps
+[ 345][   60000], R/ep=  1.80, eps=0.79, loss=  0.2352, meanQ=  2.517,    73 fps
+[ 401][   70000], R/ep=  1.50, eps=0.75, loss=  0.6286, meanQ=  3.046,    73 fps
+[ 464][   80000], R/ep=  1.20, eps=0.72, loss=  0.8093, meanQ=  3.920,    72 fps
+[ 521][   90000], R/ep=  2.80, eps=0.68, loss=  0.3528, meanQ=  3.586,    72 fps
+[ 578][  100000], R/ep=  2.40, eps=0.64, loss=  0.3350, meanQ=  4.292,    72 fps
+[ 634][  110000], R/ep=  2.90, eps=0.60, loss=  1.1436, meanQ=  4.677,    72 fps
+[ 692][  120000], R/ep=  3.20, eps=0.56, loss=  0.3999, meanQ=  5.571,    72 fps
+[ 749][  130000], R/ep=  2.90, eps=0.53, loss=  0.4676, meanQ=  4.673,    72 fps
+[ 811][  140000], R/ep=  2.60, eps=0.49, loss=  0.4117, meanQ=  5.002,    71 fps
+[ 869][  150000], R/ep=  3.30, eps=0.45, loss=  0.3138, meanQ=  5.500,    71 fps
+[ 928][  160000], R/ep=  3.20, eps=0.41, loss=  0.2836, meanQ=  4.928,    71 fps
+[ 981][  170000], R/ep=  3.70, eps=0.37, loss=  0.5799, meanQ=  5.311,    71 fps
+[1041][  180000], R/ep=  3.20, eps=0.34, loss=  0.3408, meanQ=  5.955,    71 fps
+[1096][  190000], R/ep=  3.80, eps=0.30, loss=  0.5534, meanQ=  5.004,    71 fps
+[1151][  200000], R/ep=  3.40, eps=0.26, loss=  0.2642, meanQ=  5.328,    71 fps
+[1204][  210000], R/ep=  4.10, eps=0.22, loss=  0.2791, meanQ=  5.875,    71 fps
+[1256][  220000], R/ep=  4.00, eps=0.18, loss=  0.3326, meanQ=  5.902,    71 fps
+[1308][  230000], R/ep=  3.70, eps=0.15, loss=  0.5023, meanQ=  5.652,    72 fps
+[1362][  240000], R/ep=  3.50, eps=0.11, loss=  0.2173, meanQ=  4.814,    72 fps
+[1416][  250000], R/ep=  4.20, eps=0.07, loss=  0.2208, meanQ=  4.302,    72 fps
+[1466][  260000], R/ep=  3.70, eps=0.05, loss=  0.2248, meanQ=  4.437,    72 fps
+[1519][  270000], R/ep=  4.10, eps=0.05, loss=  0.2215, meanQ=  4.525,    72 fps
+[1575][  280000], R/ep=  3.40, eps=0.05, loss=  0.3498, meanQ=  4.921,    72 fps
+[1626][  290000], R/ep=  3.60, eps=0.05, loss=  0.2108, meanQ=  4.469,    72 fps
+[1679][  300000], R/ep=  4.00, eps=0.05, loss=  0.2173, meanQ=  4.474,    72 fps
+[1730][  310000], R/ep=  3.70, eps=0.05, loss=  0.2135, meanQ=  3.763,    72 fps
+[1778][  320000], R/ep=  4.10, eps=0.05, loss=  0.1735, meanQ=  4.718,    72 fps
+[1833][  330000], R/ep=  4.00, eps=0.05, loss=  0.1767, meanQ=  4.823,    72 fps
+[1885][  340000], R/ep=  3.90, eps=0.05, loss=  0.2137, meanQ=  4.332,    72 fps
+[1941][  350000], R/ep=  3.70, eps=0.05, loss=  0.1338, meanQ=  4.208,    72 fps
+[1994][  360000], R/ep=  3.30, eps=0.05, loss=  0.1883, meanQ=  3.627,    72 fps
+[2044][  370000], R/ep=  4.70, eps=0.05, loss=  0.7406, meanQ=  3.035,    72 fps
+[2100][  380000], R/ep=  3.70, eps=0.05, loss=  0.1195, meanQ=  3.901,    72 fps
+[2150][  390000], R/ep=  4.00, eps=0.05, loss=  0.1983, meanQ=  3.450,    72 fps
+[2204][  400000], R/ep=  3.70, eps=0.05, loss=  0.1866, meanQ=  3.830,    72 fps
+[2255][  410000], R/ep=  3.60, eps=0.05, loss=  0.1973, meanQ=  3.425,    72 fps
+[2304][  420000], R/ep=  4.20, eps=0.05, loss=  0.2236, meanQ=  3.380,    72 fps
+[2357][  430000], R/ep=  4.40, eps=0.05, loss=  0.1123, meanQ=  3.281,    72 fps
+[2409][  440000], R/ep=  4.50, eps=0.05, loss=  0.1018, meanQ=  3.097,    72 fps
+[2458][  450000], R/ep=  4.50, eps=0.05, loss=  0.1090, meanQ=  3.004,    72 fps
+[2511][  460000], R/ep=  3.90, eps=0.05, loss=  0.1071, meanQ=  3.225,    72 fps
+[2564][  470000], R/ep=  4.50, eps=0.05, loss=  0.1079, meanQ=  3.211,    72 fps
+[2616][  480000], R/ep=  4.60, eps=0.05, loss=  0.1697, meanQ=  3.025,    72 fps
+[2668][  490000], R/ep=  4.40, eps=0.05, loss=  0.0973, meanQ=  2.893,    72 fps
+[2722][  500000], R/ep=  4.10, eps=0.05, loss=  0.1191, meanQ=  3.097,    72 fps
+[2773][  510000], R/ep=  4.20, eps=0.05, loss=  0.1659, meanQ=  3.079,    72 fps
+[2827][  520000], R/ep=  3.90, eps=0.05, loss=  0.1730, meanQ=  2.588,    72 fps
+[2884][  530000], R/ep=  4.00, eps=0.05, loss=  0.1070, meanQ=  2.793,    72 fps
+[2938][  540000], R/ep=  4.50, eps=0.05, loss=  0.1381, meanQ=  2.926,    72 fps
+[2991][  550000], R/ep=  4.80, eps=0.05, loss=  0.0943, meanQ=  3.620,    72 fps
+[3039][  560000], R/ep=  4.60, eps=0.05, loss=  0.1338, meanQ=  3.369,    72 fps
+[3087][  570000], R/ep=  3.50, eps=0.05, loss=  0.3043, meanQ=  3.232,    72 fps
+[3139][  580000], R/ep=  4.60, eps=0.05, loss=  0.1477, meanQ=  2.972,    72 fps
+[3186][  590000], R/ep=  4.40, eps=0.05, loss=  0.1976, meanQ=  3.720,    72 fps
+[3234][  600000], R/ep=  4.80, eps=0.05, loss=  0.1398, meanQ=  3.096,    72 fps
+[3286][  610000], R/ep=  4.20, eps=0.05, loss=  0.1052, meanQ=  2.668,    72 fps
+[3340][  620000], R/ep=  4.50, eps=0.05, loss=  0.1101, meanQ=  3.091,    72 fps
+[3389][  630000], R/ep=  5.20, eps=0.05, loss=  0.2328, meanQ=  2.962,    72 fps
+[3441][  640000], R/ep=  4.40, eps=0.05, loss=  0.1770, meanQ=  2.674,    72 fps
+[3491][  650000], R/ep=  4.00, eps=0.05, loss=  0.1484, meanQ=  2.800,    72 fps
+[3545][  660000], R/ep=  5.50, eps=0.05, loss=  0.1463, meanQ=  2.561,    72 fps
+[3595][  670000], R/ep=  4.70, eps=0.05, loss=  0.0990, meanQ=  2.392,    72 fps
+[3647][  680000], R/ep=  4.20, eps=0.05, loss=  0.1228, meanQ=  2.669,    72 fps
+[3697][  690000], R/ep=  4.90, eps=0.05, loss=  0.4823, meanQ=  2.896,    72 fps
+[3744][  700000], R/ep=  4.70, eps=0.05, loss=  0.1990, meanQ=  2.187,    72 fps
+[3800][  710000], R/ep=  5.00, eps=0.05, loss=  0.1797, meanQ=  3.147,    72 fps
+[3853][  720000], R/ep=  5.50, eps=0.05, loss=  0.1533, meanQ=  2.545,    72 fps
+[3907][  730000], R/ep=  5.20, eps=0.05, loss=  0.1860, meanQ=  3.235,    72 fps
+[3961][  740000], R/ep=  4.80, eps=0.05, loss=  0.1937, meanQ=  3.126,    72 fps
+[4013][  750000], R/ep=  4.80, eps=0.05, loss=  0.1492, meanQ=  2.127,    72 fps
+[4064][  760000], R/ep=  5.20, eps=0.05, loss=  0.0993, meanQ=  2.581,    72 fps
+[4117][  770000], R/ep=  4.40, eps=0.05, loss=  0.2218, meanQ=  2.605,    72 fps
+[4170][  780000], R/ep=  4.80, eps=0.05, loss=  0.4589, meanQ=  2.547,    72 fps
+[4222][  790000], R/ep=  5.10, eps=0.05, loss=  0.1182, meanQ=  2.115,    72 fps
+[4271][  800000], R/ep=  4.80, eps=0.05, loss=  0.2250, meanQ=  3.544,    72 fps
+[4323][  810000], R/ep=  4.70, eps=0.05, loss=  0.1480, meanQ=  3.023,    72 fps
+[4367][  820000], R/ep=  4.50, eps=0.05, loss=  0.1582, meanQ=  2.851,    72 fps
+[4417][  830000], R/ep=  4.50, eps=0.05, loss=  0.1662, meanQ=  2.720,    72 fps
+[4469][  840000], R/ep=  4.70, eps=0.05, loss=  0.0999, meanQ=  2.970,    72 fps
+[4514][  850000], R/ep=  4.90, eps=0.05, loss=  0.1391, meanQ=  2.520,    72 fps
+[4563][  860000], R/ep=  4.50, eps=0.05, loss=  0.1196, meanQ=  2.658,    72 fps
+[4610][  870000], R/ep=  5.00, eps=0.05, loss=  0.3210, meanQ=  2.438,    72 fps
+[4659][  880000], R/ep=  4.90, eps=0.05, loss=  0.1744, meanQ=  2.994,    72 fps
+[4705][  890000], R/ep=  4.40, eps=0.05, loss=  0.4392, meanQ=  3.079,    72 fps
+[4759][  900000], R/ep=  5.20, eps=0.05, loss=  0.0831, meanQ=  2.631,    72 fps
+[4805][  910000], R/ep=  5.50, eps=0.05, loss=  0.1571, meanQ=  2.303,    72 fps
+[4848][  920000], R/ep=  5.40, eps=0.05, loss=  0.2059, meanQ=  3.446,    72 fps
+[4898][  930000], R/ep=  5.60, eps=0.05, loss=  0.1012, meanQ=  2.647,    72 fps
+[4952][  940000], R/ep=  4.50, eps=0.05, loss=  0.1732, meanQ=  2.314,    72 fps
+[4997][  950000], R/ep=  5.00, eps=0.05, loss=  0.1057, meanQ=  2.704,    72 fps
+[5043][  960000], R/ep=  4.90, eps=0.05, loss=  0.0940, meanQ=  2.407,    72 fps
+[5097][  970000], R/ep=  4.70, eps=0.05, loss=  0.2890, meanQ=  2.525,    72 fps
+[5146][  980000], R/ep=  3.90, eps=0.05, loss=  0.1755, meanQ=  3.011,    72 fps
+[5189][  990000], R/ep=  5.70, eps=0.05, loss=  0.1928, meanQ=  2.167,    72 fps
+[5235][ 1000000], R/ep=  5.10, eps=0.05, loss=  0.1259, meanQ=  2.842,    72 fps
+
+done: 5235 episodes in 231.2 min (72 fps), final_eps=0.050, ran_steps=1000000, requested_steps=1000000
+score over 5235 episodes: 4.35%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  collect_sapling       91.6%
+  wake_up               91.5%
+  place_plant           86.3%
+  collect_wood          77.0%
+  place_table           52.0%
+  collect_drink         47.1%
+  eat_cow               23.5%
+  make_wood_pickaxe      9.6%
+  make_wood_sword        6.4%
+  defeat_zombie          4.6%
+  collect_stone          1.6%
+  defeat_skeleton        0.5%
+  collect_coal           0.3%
+  place_stone            0.2%
+  eat_plant              0.0%
+  place_furnace          0.0%
+  make_stone_pickaxe     0.0%
+  make_stone_sword       0.0%

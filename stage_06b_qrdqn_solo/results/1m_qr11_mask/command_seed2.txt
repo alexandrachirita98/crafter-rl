@@ -1,0 +1,1 @@
+python stage_06b_qrdqn_solo/train.py --total-steps 1000000 --num-envs 16 --seed 2 --logdir logdir --n-quantiles 11 --mask --seed-stride 16 --eps-decay-steps 250000 --warmup-steps 5000 --buffer-size 500000 --ckpt-every 100000

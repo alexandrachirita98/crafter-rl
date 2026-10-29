@@ -1,0 +1,12 @@
+Setting all rngs to seed=2
+stage stage_06b_qrdqn_solo  seed 2  steps 1,000,000  envs 16  device cuda
+buffer 500,000 transitions = 12.3 GB host RAM
+logging to /tmp/crafter-sweep-5400/crafter_reward-stage_06b_qrdqn_solo/2/shard*/stats.jsonl
+[  56][   10000], R/ep=  1.40, eps=0.98, loss=  0.1637, meanQ=  0.204,    84 fps
+[ 116][   20000], R/ep=  2.30, eps=0.94, loss=  0.1707, meanQ=  0.749,    76 fps
+[ 175][   30000], R/ep=  1.80, eps=0.91, loss=  0.2327, meanQ=  1.453,    74 fps
+[ 234][   40000], R/ep=  2.10, eps=0.87, loss=  0.2500, meanQ=  2.182,    73 fps
+[ 293][   50000], R/ep=  2.20, eps=0.83, loss=  0.4246, meanQ=  2.280,    73 fps
+[ 356][   60000], R/ep=  2.30, eps=0.79, loss=  0.1619, meanQ=  2.523,    72 fps
+[ 418][   70000], R/ep=  2.20, eps=0.75, loss=  0.2179, meanQ=  2.663,    71 fps
+[ 473][   80000], R/ep=  2.20, eps=0.72, loss=  0.2269, meanQ=  3.105,    72 fps
