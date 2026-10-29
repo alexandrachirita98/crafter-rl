@@ -1,0 +1,2 @@
+$ python stage_17_inventory_input/train.py --test-invinput
+inventory side-input self-test: OK

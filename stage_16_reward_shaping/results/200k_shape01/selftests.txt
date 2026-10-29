@@ -1,0 +1,2 @@
+$ python stage_16_reward_shaping/train.py --test-shaping
+reward-shaping self-test: OK

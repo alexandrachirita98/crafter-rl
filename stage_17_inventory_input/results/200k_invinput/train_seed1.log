@@ -1,0 +1,46 @@
+Setting all rngs to seed=1
+stage stage_17_inventory_input  seed 1  steps 200,000  envs 16  device cuda
+buffer 200,000 transitions = 4.9 GB host RAM
+logging to /tmp/crafter-287488/crafter_reward-stage_17_inventory_input/1/shard*/stats.jsonl
+inventory side-input: ON
+[  47][   10000], R/ep=  3.70, eps=0.98, loss=  0.0021, meanQ=  0.252,   117 fps
+[ 108][   20000], R/ep=  3.40, eps=0.94, loss=  0.0069, meanQ=  0.603,    98 fps
+[ 168][   30000], R/ep=  2.30, eps=0.91, loss=  0.0257, meanQ=  1.186,    93 fps
+[ 221][   40000], R/ep=  3.60, eps=0.87, loss=  0.0115, meanQ=  1.871,    93 fps
+[ 278][   50000], R/ep=  4.50, eps=0.83, loss=  0.0134, meanQ=  2.651,    92 fps
+[ 339][   60000], R/ep=  3.80, eps=0.79, loss=  0.1199, meanQ=  3.895,    90 fps
+[ 396][   70000], R/ep=  3.30, eps=0.75, loss=  0.2288, meanQ=  4.118,    90 fps
+[ 454][   80000], R/ep=  3.10, eps=0.72, loss=  0.1136, meanQ=  4.641,    89 fps
+[ 507][   90000], R/ep=  3.50, eps=0.68, loss=  0.0683, meanQ=  4.915,    90 fps
+[ 566][  100000], R/ep=  3.30, eps=0.64, loss=  0.0613, meanQ=  5.655,    89 fps
+[ 625][  110000], R/ep=  2.80, eps=0.60, loss=  0.0521, meanQ=  6.679,    89 fps
+[ 686][  120000], R/ep=  4.00, eps=0.56, loss=  0.0158, meanQ=  5.618,    88 fps
+[ 739][  130000], R/ep=  4.40, eps=0.53, loss=  0.0623, meanQ=  6.492,    88 fps
+[ 798][  140000], R/ep=  3.80, eps=0.49, loss=  0.0280, meanQ=  7.150,    88 fps
+[ 858][  150000], R/ep=  4.20, eps=0.45, loss=  0.0677, meanQ=  6.752,    88 fps
+[ 914][  160000], R/ep=  3.30, eps=0.41, loss=  0.0405, meanQ=  5.669,    88 fps
+[ 969][  170000], R/ep=  3.80, eps=0.37, loss=  0.0816, meanQ=  6.995,    88 fps
+[1023][  180000], R/ep=  3.80, eps=0.34, loss=  0.0371, meanQ=  6.908,    88 fps
+[1080][  190000], R/ep=  5.30, eps=0.30, loss=  0.0867, meanQ=  5.868,    88 fps
+[1132][  200000], R/ep=  4.00, eps=0.26, loss=  0.0268, meanQ=  6.748,    88 fps
+
+done: 1132 episodes in 37.8 min (88 fps), final_eps=0.259, ran_steps=200000, requested_steps=200000
+score over 1132 episodes: 3.70%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up               95.8%
+  collect_wood          80.7%
+  collect_sapling       77.7%
+  place_plant           74.3%
+  place_table           56.6%
+  collect_drink         29.5%
+  make_wood_pickaxe     12.1%
+  make_wood_sword        9.4%
+  eat_cow                2.4%
+  collect_stone          1.9%
+  place_stone            0.9%
+  defeat_zombie          0.5%
+  collect_coal           0.4%
+  place_furnace          0.2%
+  defeat_skeleton        0.1%
+  make_stone_pickaxe     0.1%

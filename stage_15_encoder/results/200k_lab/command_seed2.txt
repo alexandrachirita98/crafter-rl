@@ -1,0 +1,1 @@
+python stage_15_encoder/train.py --total-steps 200000 --num-envs 16 --seed 2 --logdir logdir --mask --eps-decay-steps 250000 --warmup-steps 5000 --buffer-size 500000 --seed-stride 16 --ckpt-every 100000 --encoder lab

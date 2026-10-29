@@ -1,0 +1,5 @@
+$ python stage_15_encoder/train.py --test-encoder
+  lab      (4, 17)   3,690,097 params
+  stride2  (4, 17)     413,169 params
+  nature   (4, 17)     609,457 params
+encoder self-test: OK

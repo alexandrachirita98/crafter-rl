@@ -1,0 +1,47 @@
+Setting all rngs to seed=2
+stage stage_14_extended_mask  seed 2  steps 200,000  envs 16  device cuda
+buffer 200,000 transitions = 4.9 GB host RAM
+logging to /tmp/crafter-287287/crafter_reward-stage_14_extended_mask/2/shard*/stats.jsonl
+[  50][   10000], R/ep=  2.90, eps=0.98, loss=  0.0024, meanQ=  0.167,   111 fps
+[ 109][   20000], R/ep=  3.20, eps=0.94, loss=  0.0324, meanQ=  0.652,    98 fps
+[ 168][   30000], R/ep=  3.00, eps=0.91, loss=  0.0118, meanQ=  0.869,    94 fps
+[ 226][   40000], R/ep=  3.40, eps=0.87, loss=  0.0881, meanQ=  1.772,    92 fps
+[ 285][   50000], R/ep=  4.20, eps=0.83, loss=  0.0735, meanQ=  2.750,    91 fps
+[ 341][   60000], R/ep=  3.50, eps=0.79, loss=  0.0401, meanQ=  3.029,    91 fps
+[ 398][   70000], R/ep=  3.00, eps=0.75, loss=  0.0285, meanQ=  3.512,    91 fps
+[ 453][   80000], R/ep=  4.50, eps=0.72, loss=  0.0745, meanQ=  4.703,    90 fps
+[ 508][   90000], R/ep=  3.70, eps=0.68, loss=  0.0251, meanQ=  4.885,    90 fps
+[ 567][  100000], R/ep=  4.20, eps=0.64, loss=  0.0345, meanQ=  4.753,    90 fps
+[ 626][  110000], R/ep=  4.60, eps=0.60, loss=  0.0309, meanQ=  4.527,    89 fps
+[ 679][  120000], R/ep=  3.90, eps=0.56, loss=  0.0772, meanQ=  5.518,    90 fps
+[ 738][  130000], R/ep=  4.40, eps=0.53, loss=  0.0688, meanQ=  6.717,    89 fps
+[ 787][  140000], R/ep=  5.70, eps=0.49, loss=  0.0578, meanQ=  5.704,    90 fps
+[ 839][  150000], R/ep=  5.50, eps=0.45, loss=  0.0348, meanQ=  6.536,    90 fps
+[ 896][  160000], R/ep=  5.30, eps=0.41, loss=  0.0428, meanQ=  6.929,    90 fps
+[ 951][  170000], R/ep=  5.20, eps=0.37, loss=  0.0351, meanQ=  6.193,    90 fps
+[1006][  180000], R/ep=  4.30, eps=0.34, loss=  0.0476, meanQ=  6.039,    89 fps
+[1064][  190000], R/ep=  4.90, eps=0.30, loss=  0.0514, meanQ=  7.008,    89 fps
+[1123][  200000], R/ep=  3.90, eps=0.26, loss=  0.0520, meanQ=  6.329,    89 fps
+
+done: 1123 episodes in 37.5 min (89 fps), final_eps=0.259, ran_steps=200000, requested_steps=200000
+score over 1123 episodes: 5.38%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up               96.1%
+  collect_wood          85.0%
+  collect_sapling       84.7%
+  place_plant           80.9%
+  place_table           65.7%
+  collect_drink         44.3%
+  make_wood_pickaxe     25.1%
+  make_wood_sword       19.0%
+  collect_stone          6.2%
+  place_stone            5.0%
+  eat_cow                4.9%
+  defeat_zombie          3.3%
+  collect_coal           0.6%
+  place_furnace          0.6%
+  make_stone_pickaxe     0.4%
+  make_stone_sword       0.2%
+  defeat_skeleton        0.1%
+  eat_plant              0.1%
