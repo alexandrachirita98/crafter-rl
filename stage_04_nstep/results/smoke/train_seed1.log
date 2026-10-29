@@ -1,0 +1,23 @@
+Setting all rngs to seed=1
+stage stage_04_nstep  seed 1  steps 2,000  envs 1  device cuda
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/crafter-sweep-2809/crafter_reward-stage_04_nstep/1/stats.jsonl
+[   0][     200], R/ep=   nan, eps=1.00, loss=     nan, meanQ=    nan,   547 fps
+[   2][     400], R/ep=  1.10, eps=1.00, loss=     nan, meanQ=    nan,   105 fps
+[   3][     600], R/ep=  1.43, eps=1.00, loss=  0.1706, meanQ=  0.028,    90 fps
+[   4][     800], R/ep=  1.10, eps=1.00, loss=  0.0613, meanQ=  0.038,    87 fps
+[   5][    1000], R/ep=  0.90, eps=1.00, loss=  0.0746, meanQ=  0.071,    86 fps
+[   6][    1200], R/ep=  0.77, eps=1.00, loss=  0.0512, meanQ=  0.064,    85 fps
+[   8][    1400], R/ep=  0.85, eps=1.00, loss=  0.0944, meanQ=  0.085,    77 fps
+[   9][    1600], R/ep=  0.77, eps=1.00, loss=  0.0377, meanQ=  0.069,    77 fps
+[  10][    1800], R/ep=  1.00, eps=1.00, loss=  0.0839, meanQ=  0.067,    77 fps
+[  11][    2000], R/ep=  1.00, eps=0.99, loss=  0.0252, meanQ=  0.129,    78 fps
+
+done: 11 episodes in 0.4 min (78 fps), final_eps=0.994, ran_steps=2000, requested_steps=2000
+score over 11 episodes: 0.94%   (random baseline: ~1.6%)
+
+per-achievement success rate, non-zero only:
+  wake_up              100.0%
+  collect_sapling       45.5%
+  place_plant           45.5%
+  collect_wood           9.1%
