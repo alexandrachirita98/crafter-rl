@@ -34,15 +34,17 @@ class DrQResetsDoubleDQN(DoubleDQN):
     """Stage 03 with shifted inputs and a periodically re-initialised head."""
 
     def __init__(self, *args, reset_every=100_000, reset_scope='last',
-                 **kwargs):
+                 pad=4, **kwargs):
         super().__init__(*args, **kwargs)
         self._reset_every = reset_every
         self._reset_scope = reset_scope
+        self._pad = pad
 
     def _update(self, states, actions, rewards, states_, mask, legal_):
         # independent shifts for the online input and the target input
-        return super()._update(random_shift(states), actions, rewards,
-                               random_shift(states_), mask, legal_)
+        return super()._update(random_shift(states, self._pad), actions,
+                               rewards, random_shift(states_, self._pad),
+                               mask, legal_)
 
     def learn(self, *transition):
         super().learn(*transition)
@@ -80,10 +82,17 @@ AGENT_CLS = DrQResetsDoubleDQN
 
 
 def extra_args(p):
-    p.add_argument('--reset-every', type=int, default=100_000)
+    p.add_argument('--reset-every', type=int, default=100_000,
+                   help='a value that DIVIDES --total-steps fires a reset on '
+                        'the final step and the reported agent then has a '
+                        'fresh head: 150000 avoids that at 1M, 100000 does not')
     p.add_argument('--reset-scope', choices=('last', 'all'), default='last',
                    help="which Linears a reset re-initialises; 'all' is the "
                         'pre-flag behaviour. See stage 10')
+    p.add_argument('--pad', type=int, default=4,
+                   help='DrQ random-shift magnitude in pixels. 0 disables the '
+                        'augmentation (isolating the resets); 1 keeps it but '
+                        'leaves the 14px inventory HUD strip legible')
     p.add_argument('--test-solo', action='store_true',
                    help='check the isolation, the shift and one reset, then exit')
 
@@ -92,7 +101,7 @@ def build(args, capacity):
     net = get_estimator(N_ACTIONS, lin_size=args.lin_size, stride=args.stride)
     buffer = ReplayMemory(size=capacity, batch_size=args.batch_size)
     return net, buffer, {'reset_every': args.reset_every,
-                         'reset_scope': args.reset_scope}
+                         'reset_scope': args.reset_scope, 'pad': args.pad}
 
 
 # ------------------------------------------------------------- self-test
@@ -119,8 +128,17 @@ def test_solo(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
     print(f'\nshift keeps {tuple(y.shape)} uint8  {shift_ok}   want True')
     print(f'shift actually moves pixels        {moved}   want True')
 
+    # --pad 0 must be the exact identity, or "isolate the resets" is a lie.
+    identity = torch.equal(random_shift(x, 0), x)
+    small = random_shift(x, 1)
+    small_ok = (small.shape == x.shape and small.dtype == torch.uint8
+                and not torch.equal(small, x))
+    print(f'--pad 0 is the identity            {identity}   want True')
+    print(f'--pad 1 still shifts, same shape   {small_ok}   want True')
+
     args = argparse.Namespace(lin_size=16, stride=2, batch_size=batch,
-                              reset_every=reset_every, reset_scope='last')
+                              reset_every=reset_every, reset_scope='last',
+                              pad=4)
     net, buffer, extra = build(args, capacity)
     agent = AGENT_CLS(net, buffer, O.Adam(net.parameters(), lr=1e-4),
                       get_epsilon_schedule(1.0, 0.05, steps), N_ACTIONS,
@@ -177,7 +195,8 @@ def test_solo(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
     print(f'  scope=last, so the wide Linear(flat, lin) is KEPT -- the '
           f'representation lives there, not in the 2,528-param conv stack')
 
-    ok = (no_nstep and no_quant and shift_ok and moved and head_changed
+    ok = (no_nstep and no_quant and shift_ok and moved and identity
+          and small_ok and head_changed
           and synced and buf_at_reset > 0 and trunk_kept and n_layers == 1
           and len(fired) == steps // reset_every)
     print('\nPASS' if ok else '\nFAIL')

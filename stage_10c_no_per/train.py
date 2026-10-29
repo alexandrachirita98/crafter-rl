@@ -57,13 +57,14 @@ class NoPerStack(MunchausenQRDQN):
     """
 
     def __init__(self, *args, ez_mu=2.0, ez_max_repeat=100,
-                 reset_every=100_000, reset_scope='last', **kwargs):
+                 reset_every=100_000, reset_scope='last', pad=4, **kwargs):
         super().__init__(*args, **kwargs)
         self._mu, self._cap = ez_mu, ez_max_repeat
         self._repeat_action = np.zeros(self._num_envs, dtype=np.int64)
         self._repeat_left = np.zeros(self._num_envs, dtype=np.int64)
         self._reset_every = reset_every
         self._reset_scope = reset_scope
+        self._pad = pad
 
     # ---------------------------------------------------- stage 09
 
@@ -110,8 +111,9 @@ class NoPerStack(MunchausenQRDQN):
 
     def _per_sample(self, states, actions, rewards, states_, mask, n):
         # independent shifts for the online input and the target input
-        return super()._per_sample(random_shift(states), actions, rewards,
-                                   random_shift(states_), mask, n)
+        return super()._per_sample(random_shift(states, self._pad), actions,
+                                   rewards, random_shift(states_, self._pad),
+                                   mask, n)
 
     def learn(self, *transition):
         super().learn(*transition)
@@ -138,10 +140,15 @@ def extra_args(p):
     # than borrowed because extra_09/extra_10 pull in stage 08's parser.
     p.add_argument('--ez-mu', type=float, default=2.0)
     p.add_argument('--ez-max-repeat', type=int, default=100)
-    p.add_argument('--reset-every', type=int, default=100_000)
+    p.add_argument('--reset-every', type=int, default=100_000,
+                   help='a value that DIVIDES --total-steps fires a reset on '
+                        'the final step; see stage 10')
     p.add_argument('--reset-scope', choices=('last', 'all'), default='last',
                    help="which Linears a reset re-initialises; 'all' is the "
                         'pre-flag behaviour. See stage 10')
+    p.add_argument('--pad', type=int, default=4,
+                   help='DrQ random-shift magnitude in pixels; 0 disables it. '
+                        'See stage 10')
     p.add_argument('--test-no-per', action='store_true',
                    help='check the MRO, the uniform batch and a reset, then exit')
 
@@ -153,7 +160,7 @@ def build(args, capacity):
     return net, buffer, dict(extra, ez_mu=args.ez_mu,
                              ez_max_repeat=args.ez_max_repeat,
                              reset_every=args.reset_every,
-                             reset_scope=args.reset_scope)
+                             reset_scope=args.reset_scope, pad=args.pad)
 
 
 # ------------------------------------------------------------- self-test
@@ -190,7 +197,7 @@ def test_no_per(steps=40, warmup=20, reset_every=30, capacity=64, batch=8,
     args = argparse.Namespace(lin_size=16, stride=2, batch_size=batch,
                               n_step=3, n_quantiles=11, ez_mu=2.0,
                               ez_max_repeat=100, reset_every=reset_every,
-                              reset_scope='last')
+                              reset_scope='last', pad=4)
     net, buffer, extra = build(args, capacity)
     agent = NoPerStack(net, buffer, O.Adam(net.parameters(), lr=1e-4),
                        get_epsilon_schedule(1.0, 0.05, steps), N_ACTIONS,

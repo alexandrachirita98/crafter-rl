@@ -37,7 +37,17 @@ STAGE_ID = 'stage_10_drq_resets'
 
 
 def random_shift(x, pad=4):
-    """x: uint8 (B, 3, H, W) as _to_tensor makes it. Same shape and dtype back."""
+    """x: uint8 (B, 3, H, W) as _to_tensor makes it. Same shape and dtype back.
+
+    pad=0 is the identity, which is how --pad 0 isolates the resets from the
+    augmentation. Why pad is worth tuning at all: the 64px frame is 9x7 world
+    tiles above a 2-row, 14px inventory strip, and those count digits are the
+    only pixel evidence of what the agent is holding. A +-4px shift moves and
+    partially clips that strip, which DrQ's Atari/DMC home has no equivalent
+    of. --pad 1 keeps the augmentation while leaving the HUD legible.
+    """
+    if pad <= 0:
+        return x
     B, C, H, W = x.shape
     xp = F.pad(x.float(), (pad,) * 4, mode='replicate')   # replicate needs float
     i = torch.randint(0, 2 * pad + 1, (B,), device=x.device)
@@ -85,15 +95,17 @@ def reset_last_linear(estimator, streams, scope='last'):
 class DrQResets(EzGreedy):
 
     def __init__(self, *args, reset_every=100_000, reset_scope='last',
-                 **kwargs):
+                 pad=4, **kwargs):
         super().__init__(*args, **kwargs)
         self._reset_every = reset_every
         self._reset_scope = reset_scope
+        self._pad = pad
 
     def _per_sample(self, states, actions, rewards, states_, mask, n):
         # independent shifts for the online input and the target input
-        return super()._per_sample(random_shift(states), actions, rewards,
-                                   random_shift(states_), mask, n)
+        return super()._per_sample(random_shift(states, self._pad), actions,
+                                   rewards, random_shift(states_, self._pad),
+                                   mask, n)
 
     def learn(self, *transition):
         super().learn(*transition)
@@ -116,11 +128,18 @@ class DrQResets(EzGreedy):
 
 def extra_args(p):
     extra_09(p)
-    p.add_argument('--reset-every', type=int, default=100_000)
+    p.add_argument('--reset-every', type=int, default=100_000,
+                   help='a value that DIVIDES --total-steps fires a reset on '
+                        'the final step and the reported agent then has a '
+                        'fresh head: 150000 avoids that at 1M, 100000 does not')
     p.add_argument('--reset-scope', choices=('last', 'all'), default='last',
                    help="which Linears a reset re-initialises. 'all' is what "
                         'every run logged before this flag did, and at '
                         '--stride 1 that is 99.97%% of the net, not a head')
+    p.add_argument('--pad', type=int, default=4,
+                   help='DrQ random-shift magnitude in pixels. 0 disables the '
+                        'augmentation (isolating the resets); 1 keeps it but '
+                        'leaves the 14px inventory HUD strip legible')
     p.add_argument('--test-drq', action='store_true',
                    help='check the shift and one head reset, then exit')
 
@@ -128,7 +147,7 @@ def extra_args(p):
 def build(args, capacity):
     net, buffer, extra = build_09(args, capacity)
     return net, buffer, dict(extra, reset_every=args.reset_every,
-                             reset_scope=args.reset_scope)
+                             reset_scope=args.reset_scope, pad=args.pad)
 
 
 # ------------------------------------------------------------- self-test
@@ -157,11 +176,19 @@ def test_drq(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
     print(f'shift keeps {tuple(y.shape)} uint8   {shape_ok}   want True')
     print(f'shift actually moves pixels        {moved}   want True')
 
+    # --pad 0 must be the exact identity, or "isolate the resets" is a lie.
+    identity = torch.equal(random_shift(x, 0), x)
+    small = random_shift(x, 1)
+    small_ok = (small.shape == x.shape and small.dtype == torch.uint8
+                and not torch.equal(small, x))
+    print(f'--pad 0 is the identity            {identity}   want True')
+    print(f'--pad 1 still shifts, same shape   {small_ok}   want True')
+
     args = argparse.Namespace(lin_size=16, stride=2, batch_size=batch,
                               n_step=3, n_quantiles=11, per_alpha=0.5,
                               total_steps=steps, ez_mu=2.0, ez_max_repeat=100,
                               reset_every=reset_every,
-                              reset_scope='last')
+                              reset_scope='last', pad=4)
     net, buffer, extra = build(args, capacity)
     agent = DrQResets(net, buffer, O.Adam(net.parameters(), lr=1e-4),
                       get_epsilon_schedule(1.0, 0.05, steps), N_ACTIONS,
@@ -197,8 +224,8 @@ def test_drq(steps=40, warmup=20, reset_every=30, capacity=64, batch=8):
     print(f'_reset_head leaves trunk   {trunk_kept}   want True')
     print(f'buffer kept its data       {buffer_kept}   want True  '
           f'({len(buffer)} transitions, nothing dropped)')
-    ok = (shape_ok and moved and head_changed and synced and trunk_kept
-          and buffer_kept)
+    ok = (shape_ok and moved and identity and small_ok and head_changed
+          and synced and trunk_kept and buffer_kept)
     print('\nPASS' if ok else '\nFAIL')
     return 0 if ok else 1
 
