@@ -1,12 +1,5 @@
 $ python stage_04_nstep/train.py --test-nstep
-death flush, gamma=0.9, n=3
- from      G   s_n  mask   n
-   s0   1.00    s3   1.0   3 ok
-   s1   0.81    s4   1.0   3 ok
-   s2   0.90    s5   0.0   3 ok
-   s3   1.00    s5   0.0   2 ok
-   s4   0.00    s5   0.0   1 ok
-
-cap flush: (mask, n) = [(1.0, 2), (1.0, 1)], want [(1.0, 2), (1.0, 1)]
-
-PASS
+Traceback (most recent call last):
+  File "/export/home/acs/stud/a/alexandra.chirita98/code/crafter-rl/stage_04_nstep/train.py", line 26, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'

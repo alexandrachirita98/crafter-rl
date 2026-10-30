@@ -1,0 +1,8 @@
+Setting all rngs to seed=1
+stage stage_14_extended_mask  seed 1  steps 2,000  envs 1  device cpu
+buffer 2,000 transitions = 0.0 GB host RAM
+logging to /tmp/crafter-run-1268774/crafter_reward-stage_14_extended_mask/1/stats.jsonl
+[   0][     200], R/ep=   nan, eps=1.00, loss=     nan, meanQ=    nan,   421 fps
+[   2][     400], R/ep=  2.10, eps=1.00, loss=     nan, meanQ=    nan,    94 fps
+[   3][     600], R/ep=  2.77, eps=1.00, loss=  0.0018, meanQ=  0.025,    23 fps
+[   4][     800], R/ep=  2.60, eps=1.00, loss=  0.0029, meanQ=  0.040,    13 fps

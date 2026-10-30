@@ -1,0 +1,1 @@
+python stage_14_extended_mask/train.py --total-steps 1000000 --num-envs 16 --seed 1 --logdir logdir --mask --mask-extended --mask-skip-grass --eps-decay-steps 250000 --warmup-steps 5000 --buffer-size 500000 --seed-stride 16 --ckpt-every 100000
