@@ -1,0 +1,23 @@
+$ python stage_18_extmask_nstep/train.py --test-stack
+death flush, gamma=0.9, n=3
+ from      G   s_n  mask   n
+   s0   1.00    s3   1.0   3 ok
+   s1   0.81    s4   1.0   3 ok
+   s2   0.90    s5   0.0   3 ok
+   s3   1.00    s5   0.0   2 ok
+   s4   0.00    s5   0.0   1 ok
+
+cap flush: (mask, n) = [(1.0, 2), (1.0, 1)], want [(1.0, 2), (1.0, 1)]
+
+PASS
+interleaved 2 envs, gamma=0.9, n=3
+  env0 pushes 6, env1 pushes 6
+  env1 rows with leaked reward: 0 (want 0)
+  env1 rows with a cross-env state_: 0 (want 0)
+  env0 rows with a cross-env state_: 0 (want 0)
+  env0 full-window G = [2.71], want 2.71
+
+PASS
+extended mask self-test: OK
+
+stack wiring: PASS
