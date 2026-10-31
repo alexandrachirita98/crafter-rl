@@ -22,6 +22,7 @@ Run:
 
 import argparse
 import itertools
+import json
 import pathlib
 import random
 import signal
@@ -39,7 +40,8 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from common.env import N_ACTIONS, OBS_SHAPE, VecEnv, bootstrap_mask
 from common.masking import legal_masks, random_legal
-from common.metrics import ACHIEVEMENTS, score_pooled
+from common.metrics import (ACHIEVEMENTS, compute_scores,
+                            score_pooled, success_percents)
 
 STAGE_ID = 'stage_02_dqn'
 
@@ -261,6 +263,26 @@ class DQN:
                 actions[greedy] = qvals.argmax(1).cpu().numpy()
         return actions
 
+    def _q(self, states):
+        """Q-values, (B, A). Stage 06's quantile head overrides this to take
+        the mean over quantiles, so act_greedy works there unchanged.
+        """
+        return self._estimator(states)
+
+    def act_greedy(self, states, masks=None):
+        """Argmax over legal actions, no epsilon and no warmup.
+
+        Separate from step() on purpose: step() advances the epsilon
+        schedule and the warmup counter, so calling it for evaluation would
+        consume the training schedule and make eval change training.
+        """
+        n = len(states)
+        masks = _mask_or_ones(masks, n, self._action_num)
+        with torch.no_grad():
+            qvals = self._q(_to_tensor(np.asarray(states)))
+            qvals = _apply_mask(qvals, masks)
+            return qvals.argmax(1).cpu().numpy()
+
     def learn(self, i, state, action, reward, state_, mask, legal_=None):
         """`i` is which env the transition came from. Stages that keep
         per-trajectory state (04's n-step window, 09's repeat walk) index by
@@ -423,10 +445,61 @@ def load_ckpt(path, agent):
     return ck['step'], ck['episodes']
 
 
+def evaluate(agent, num_envs, seed, episodes_wanted=16,
+             use_mask=False, mask_extended=False, mask_skip_grass=False):
+    """Run the greedy policy (eps=0) on fresh worlds and score it.
+
+    Its own VecEnv with logdir=None, so nothing lands in the training
+    stats.jsonl -- the training score has to stay the number every run in
+    */results/ already reports. Seeds come from a block well above the
+    training seeds so eval worlds are never training worlds.
+
+    Returns (score_percent, mean_reward, mean_length, n_episodes).
+    """
+    env = VecEnv(num_envs, logdir=None, seed=10_000 + seed,
+                 seed_stride=max(1, num_envs))
+    states = env.reset()
+    masks = None
+    rewards_out, lengths_out, rows = [], [], []
+    ep_reward = np.zeros(num_envs, dtype=np.float64)
+    ep_len = np.zeros(num_envs, dtype=np.int64)
+    # Achievements come off info, since no Recorder is writing stats here.
+    unlocked = [dict() for _ in range(num_envs)]
+
+    while len(rows) < episodes_wanted:
+        actions = agent.act_greedy(states, masks)
+        states, rew, dones, infos = env.step(actions)
+        if use_mask:
+            masks = legal_masks(infos, dones, extended=mask_extended,
+                                skip_grass=mask_skip_grass)
+        for i in range(num_envs):
+            ep_reward[i] += rew[i]
+            ep_len[i] += 1
+            ach = infos[i].get('achievements')
+            if ach:
+                unlocked[i] = dict(ach)
+            if dones[i]:
+                row = {f'achievement_{k}': int(v)
+                       for k, v in unlocked[i].items()}
+                row['reward'] = float(ep_reward[i])
+                row['length'] = int(ep_len[i])
+                rows.append(row)
+                rewards_out.append(float(ep_reward[i]))
+                lengths_out.append(int(ep_len[i]))
+                ep_reward[i], ep_len[i] = 0.0, 0
+                unlocked[i] = {}
+
+    percents = success_percents(rows)
+    score = float(compute_scores(percents))
+    return (score, float(np.mean(rewards_out)), float(np.mean(lengths_out)),
+            len(rows))
+
+
 def train(agent, env, step_num=100_000, log_every=10_000,
           use_mask=False, mask_extended=False, mask_skip_grass=False,
           ckpt_path=None, ckpt_every=0,
-          start_step=0, start_episodes=0):
+          start_step=0, start_episodes=0,
+          eval_every=0, eval_episodes=16, eval_seed=1, eval_log=None):
     """The lab's loop, over a VecEnv on Crafter's 4-tuple API.
 
     step_num is ENV STEPS, the benchmark budget, not loop iterations: with
@@ -535,6 +608,23 @@ def train(agent, env, step_num=100_000, log_every=10_000,
                 and done_steps % ckpt_every < num_envs:
             save_ckpt(ckpt_path, agent, done_steps, episodes)
 
+        if eval_every and done_steps % eval_every < num_envs:
+            ev = evaluate(agent, num_envs, eval_seed,
+                          episodes_wanted=eval_episodes, use_mask=use_mask,
+                          mask_extended=mask_extended,
+                          mask_skip_grass=mask_skip_grass)
+            score, mrew, mlen, n_ep = ev
+            print(f'  eval @{done_steps:8d}: score={score:5.2f}%  '
+                  f'R/ep={mrew:6.2f}  len={mlen:5.1f}  ({n_ep} ep, greedy)',
+                  flush=True)
+            if eval_log is not None:
+                with open(eval_log, 'a') as fh:
+                    fh.write(json.dumps({
+                        'step': done_steps, 'score_percent': score,
+                        'mean_episode_reward': mrew,
+                        'mean_episode_length': mlen,
+                        'episodes': n_ep}) + '\n')
+
         # A caught SIGTERM means the allocation is about to end. Save and
         # leave by the normal path so the caller still writes its summary
         # over the episodes recorded so far.
@@ -607,6 +697,14 @@ def parse_args(argv=None, extra_args=None):
                    help='linear over the first 25%% of a 1M run')
 
     p.add_argument('--log-every', type=int, default=10_000)
+
+    # Greedy (eps=0) evaluation on held-out worlds, for the eval curves the
+    # assignment asks for. 0 disables, which is what every run already in
+    # */results/ did -- their summaries are training-time numbers only.
+    p.add_argument('--eval-every', type=int, default=0,
+                   help='greedy-eval every N env steps; 0 disables')
+    p.add_argument('--eval-episodes', type=int, default=16,
+                   help='episodes per greedy eval')
 
     # Weights only, not the buffer: see save_ckpt. 0 disables, which is what
     # every run already in */results/ did.
@@ -730,7 +828,9 @@ def main(argv=None, agent_cls=DQN, stage_id=STAGE_ID, extra_args=None,
         mask_extended=getattr(args, 'mask_extended', False),
         mask_skip_grass=getattr(args, 'mask_skip_grass', False),
         ckpt_path=ckpt_path, ckpt_every=args.ckpt_every,
-        start_step=start_step, start_episodes=start_episodes)
+        start_step=start_step, start_episodes=start_episodes,
+        eval_every=args.eval_every, eval_episodes=args.eval_episodes,
+        eval_seed=args.seed, eval_log=logdir / 'eval.jsonl')
 
     # final_eps printed explicitly: the progress lines are gated on
     # --log-every, so a run shorter than one interval has none to scrape.
