@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 *.egg-info
 /dist
+/build
+.pytest_cache/
 /*.png
 /*.mp4
 .DS_Store
@@ -29,3 +31,10 @@ venv/
 
 # Stage-by-stage explanatory notes (local study aid, not submitted)
 /stage-notes/
+
+# Submission bundle (built copy of the repo, rebuilt on demand)
+/submission/
+
+# Large recorded clips (GIF/MP4 kept local, only small stills are tracked)
+/media/*.gif
+/media/*.mp4

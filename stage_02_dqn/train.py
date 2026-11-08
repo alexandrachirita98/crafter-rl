@@ -641,7 +641,7 @@ def train(agent, env, step_num=100_000, log_every=10_000,
 # ------------------------------------------------------------------ 6. main
 
 
-def parse_args(argv=None, extra_args=None):
+def parse_args(argv=None, extra_args=None, return_parser=False):
     p = argparse.ArgumentParser(
         description='Stage 02: the course lab DQN, on Crafter.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -730,6 +730,10 @@ def parse_args(argv=None, extra_args=None):
     # A later stage adds its own flags here; see stage_04_nstep/train.py.
     if extra_args is not None:
         extra_args(p)
+    # The submission entry point needs the parser itself, to show --help with
+    # its own defaults rather than this stage's development ones.
+    if return_parser:
+        return p
     return p.parse_args(argv)
 
 

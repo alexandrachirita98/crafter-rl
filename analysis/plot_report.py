@@ -53,9 +53,9 @@ GRID = '#d8d7d2'
 #   label, directory, seeds, color
 RUNS = [
     ('Ours (mask + 3-step)', 'stage_18_extmask_nstep/results/1m_skipgrass_n3',
-     (1, 2), C_AGENT),
+     (1, 2, 3, 4, 5, 6, 7, 8), C_AGENT),
     ('Double DQN (control)', 'stage_14_extended_mask/results/1m_control',
-     (1, 2), C_CONTROL),
+     (1, 2, 3, 4, 5), C_CONTROL),
 ]
 RANDOM = ('Random', 'stage_01_random/results', (1,), C_RANDOM)
 
@@ -64,11 +64,12 @@ ABLATION = [
     ('Double DQN', 'stage_03_double/results/1m_base', (1, 2)),
     ('+ mask', 'stage_03_double/results/1m_fix_mask', (1, 2)),
     ('+ n-step(3)', 'stage_04_nstep/results/1m_n3_mask', (1, 2)),
-    ('+ ext. mask', 'stage_14_extended_mask/results/1m_extmask', (1, 2)),
+    ('+ ext. mask', 'stage_14_extended_mask/results/1m_extmask',
+     (1, 2, 3, 4, 5)),
     ('+ skip-grass', 'stage_14_extended_mask/results/1m_skipgrass',
      (1, 2, 3, 4)),
     ('+ both (ours)', 'stage_18_extmask_nstep/results/1m_skipgrass_n3',
-     (1, 2)),
+     (1, 2, 3, 4, 5, 6, 7, 8)),
 ]
 
 
